@@ -313,6 +313,32 @@
         // Wake Lock Reference
         let wakeLockSentinel = null;
 
+        // Detect iPhone / iOS
+        function isiPhone() {
+            return /iPhone|iPad|iPod/i.test(navigator.userAgent) || 
+                   (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+        }
+
+        async function handleImageSave(blob, filename) {
+            if (isiPhone() && navigator.canShare) {
+                const file = new File([blob], filename, { type: blob.type });
+                if (navigator.canShare({ files: [file] })) {
+                    try {
+                        await navigator.share({
+                            files: [file],
+                            title: filename,
+                        });
+                        return true;
+                    } catch (err) {
+                        if (err.name !== 'AbortError') {
+                            console.error('Share error:', err);
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+
         async function toggleWakeLock(checkbox) {
             if (checkbox.checked) {
                 try {
@@ -320,7 +346,6 @@
                         wakeLockSentinel = await navigator.wakeLock.request('screen');
                         wakeLockSentinel.addEventListener('release', () => {
                             wakeLockSentinel = null;
-                            // Sync checkbox if system released it
                             document.getElementById('wakelock-toggle').checked = false;
                             document.getElementById('wakelock-toggle-device').checked = false;
                         });
@@ -339,7 +364,6 @@
             }
         }
 
-        // Re-acquire wake lock if page becomes visible again during active transfer
         document.addEventListener('visibilitychange', async () => {
             if (wakeLockSentinel !== null && document.visibilityState === 'visible') {
                 try {
@@ -348,7 +372,6 @@
             }
         });
 
-        // Auto-join via URL if code is present
         window.onload = () => {
             const params = new URLSearchParams(window.location.search);
             const codeParam = params.get('code');
@@ -358,7 +381,6 @@
             }
         };
 
-        // --- View Management ---
         function showView(viewId) {
             document.querySelectorAll('main > div').forEach(el => el.classList.add('hidden'));
             document.getElementById(viewId).classList.remove('hidden');
@@ -369,7 +391,6 @@
         }
 
         async function resetApp() {
-            // Release Wake Lock on session reset
             if (wakeLockSentinel) {
                 await wakeLockSentinel.release();
                 wakeLockSentinel = null;
@@ -395,7 +416,6 @@
             showView('view-home');
         }
 
-        // --- User Name Flow ---
         function promptName(callback) {
             document.getElementById('username-input').value = '';
             document.getElementById('name-modal').classList.remove('hidden');
@@ -415,7 +435,6 @@
             if (e.key === 'Enter') submitName();
         });
 
-        // --- Helpers ---
         function generateRandomCode() {
             return Math.random().toString(36).substring(2, 5).toLowerCase();
         }
@@ -450,7 +469,6 @@
             container.scrollTop = container.scrollHeight;
         }
 
-        // --- QR Code Generators ---
         function generateQR(containerId, codeText) {
             const container = document.getElementById(containerId);
             container.innerHTML = '';
@@ -472,7 +490,6 @@
             }
         }
 
-        // --- Process: Host Setup ---
         function initSetup(mode) {
             currentMode = mode;
             isHost = true;
@@ -582,7 +599,6 @@
             });
         }
 
-        // --- Process: Guest Join ---
         function joinCode() {
             const code = document.getElementById('join-code-input').value.trim().toLowerCase();
             if (code.length !== 3) return;
@@ -617,8 +633,7 @@
             });
         }
 
-        // --- Core Data Handling (Router) ---
-        function handleIncomingData(sourceConn, data) {
+        async function handleIncomingData(sourceConn, data) {
             if (data.type === 'handshake') {
                 currentMode = data.mode;
                 if (currentMode === 'quick' || currentMode === 'mega') {
@@ -664,15 +679,28 @@
 
             if (data.type === 'file') {
                 const blob = new Blob([data.buffer], { type: data.mime });
+                const isImage = data.mime && data.mime.startsWith('image/');
                 
                 if (currentMode === 'quick' || currentMode === 'mega') {
-                    downloadBlob(blob, data.name);
+                    let savedToPhotos = false;
+                    if (isImage && isiPhone()) {
+                        savedToPhotos = await handleImageSave(blob, data.name);
+                    }
+                    if (!savedToPhotos) {
+                        downloadBlob(blob, data.name);
+                    }
                     document.getElementById('join-code-input').value = 'Done!';
                     setTimeout(() => { if(!isHost) resetApp(); }, 2000);
                 }
                 else if (currentMode === 'device') {
                     addLog('device-link-log', `Received: ${data.name}`);
-                    downloadBlob(blob, data.name);
+                    let savedToPhotos = false;
+                    if (isImage && isiPhone()) {
+                        savedToPhotos = await handleImageSave(blob, data.name);
+                    }
+                    if (!savedToPhotos) {
+                        downloadBlob(blob, data.name);
+                    }
                     triggerPopup(`Received file: ${data.name}`);
                 }
                 else if (currentMode === 'group') {
@@ -680,21 +708,36 @@
                         connections.forEach(c => { if(c !== sourceConn) c.send(data); });
                     }
                     const url = URL.createObjectURL(blob);
+                    
+                    let actionHtml = `<a href="${url}" download="${data.name}" class="btn-accent text-center text-[11px] py-1 px-3 font-bold">Download</a>`;
+                    
                     addLog('group-file-log', `
                         <div class="p-2 border-2 border-[#2E3138] flex flex-col gap-1 bg-[#2E3138]/5 rounded-md">
                             <span class="font-bold text-xs truncate">${data.name}</span>
                             <span class="text-[10px] font-bold opacity-70">Shared by ${data.sender}</span>
                             <div class="flex justify-between items-end mt-1">
                                 <span class="font-mono text-[10px] font-bold opacity-80">${formatBytes(data.size)}</span>
-                                <a href="${url}" download="${data.name}" class="btn-accent text-center text-[11px] py-1 px-3 font-bold">Download</a>
+                                <div id="file-action-${data.name.replace(/[^a-zA-Z0-9]/g, '_')}-${Math.random()}">${actionHtml}</div>
                             </div>
                         </div>
                     `);
+
+                    // Inject iPhone Save to Photos button if applicable
+                    if (isImage && isiPhone()) {
+                        const lastFileLog = document.getElementById('group-file-log').lastElementChild;
+                        const actionContainer = lastFileLog.querySelector('div > div:last-child');
+                        if (actionContainer) {
+                            const saveBtn = document.createElement('button');
+                            saveBtn.className = "btn-outline text-center text-[11px] py-1 px-3 font-bold mr-1";
+                            saveBtn.innerText = "Save to Photos";
+                            saveBtn.onclick = () => handleImageSave(blob, data.name);
+                            actionContainer.insertBefore(saveBtn, actionContainer.firstChild);
+                        }
+                    }
                 }
             }
         }
 
-        // --- Transmitters ---
         function sendFileRaw(conn, file) {
             const reader = new FileReader();
             reader.onload = (e) => {
@@ -710,7 +753,6 @@
             reader.readAsArrayBuffer(file);
         }
 
-        // Group Handlers
         function sendGroupChat() {
             const input = document.getElementById('group-chat-input');
             const msg = input.value.trim();
@@ -743,7 +785,6 @@
             `);
         }
 
-        // Device Link Handlers
         function sendDeviceLinkFile(event) {
             const files = event.target.files;
             for(let file of files) {
@@ -775,7 +816,6 @@
             };
         }
 
-        // Key bindings
         document.getElementById('group-chat-input').addEventListener('keypress', function (e) {
             if (e.key === 'Enter') sendGroupChat();
         });
