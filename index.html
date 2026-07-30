@@ -37,52 +37,6 @@
     <!-- JSZip for client-side file compression -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 
-    <!-- Firebase SDK Modules -->
-    <script type="module">
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, setDoc, getDoc, deleteDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-        import { getStorage, ref, uploadBytesResumable, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
-
-        // Global Firebase Holder
-        window.fb = {
-            initialized: false,
-            doc, setDoc, getDoc, deleteDoc, ref, uploadBytesResumable, getDownloadURL, deleteObject
-        };
-
-        // Get saved config from localStorage if available, or environment
-        const savedConfig = localStorage.getItem('zipdrop_firebase_config');
-        let firebaseConfig = null;
-
-        if (savedConfig) {
-            try { firebaseConfig = JSON.parse(savedConfig); } catch(e){}
-        } else if (typeof __firebase_config !== 'undefined' && __firebase_config) {
-            try { firebaseConfig = JSON.parse(__firebase_config); } catch(e){}
-        }
-
-        if (firebaseConfig && firebaseConfig.apiKey) {
-            try {
-                const app = initializeApp(firebaseConfig);
-                const auth = getAuth(app);
-                const db = getFirestore(app);
-                const storage = getStorage(app);
-                const appId = typeof __app_id !== 'undefined' ? __app_id : 'zipdrop-app';
-
-                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                    await signInWithCustomToken(auth, __initial_auth_token);
-                } else {
-                    await signInAnonymously(auth);
-                }
-
-                Object.assign(window.fb, {
-                    app, auth, db, storage, appId, initialized: true
-                });
-            } catch (err) {
-                console.error("Firebase init failed:", err);
-            }
-        }
-    </script>
-
     <script>
         tailwind.config = {
             theme: {
@@ -215,12 +169,7 @@
             <!-- Creation Grid -->
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 
-                <button onclick="initSetup('group')" class="panel p-6 text-left hover:bg-[#2E3138]/5 transition group">
-                    <h2 class="text-xl font-bold mb-2">Groups</h2>
-                    <p class="text-sm opacity-80">Create a shared room for chat and multi-user file drops.</p>
-                </button>
-
-                <button onclick="initSetup('quick')" class="panel p-6 text-left hover:bg-[#2E3138]/5 transition">
+                <button onclick="initSetup('quick')" class="panel p-6 text-left hover:bg-[#2E3138]/5 transition group">
                     <h2 class="text-xl font-bold mb-2">Quick Share</h2>
                     <p class="text-sm opacity-80">Upload one file. Instantly downloads when code is entered.</p>
                 </button>
@@ -230,14 +179,14 @@
                     <p class="text-sm opacity-80">Persistent 1-to-1 link for instant back-and-forth drops.</p>
                 </button>
 
+                <button onclick="initSetup('group')" class="panel p-6 text-left hover:bg-[#2E3138]/5 transition">
+                    <h2 class="text-xl font-bold mb-2">Groups</h2>
+                    <p class="text-sm opacity-80">Create a shared room for chat and multi-user file drops.</p>
+                </button>
+
                 <button onclick="initSetup('mega')" class="panel p-6 text-left hover:bg-[#2E3138]/5 transition">
                     <h2 class="text-xl font-bold mb-2">Mega Transfer</h2>
                     <p class="text-sm opacity-80">Select many files. Automatically compresses into a ZIP and sends.</p>
-                </button>
-
-                <button onclick="initSetup('cloud')" class="panel p-6 text-left hover:bg-[#2E3138]/5 transition sm:col-span-2">
-                    <h2 class="text-xl font-bold mb-2">Cloud Vault</h2>
-                    <p class="text-sm opacity-80">Upload a file to the cloud. Recipient can download using a code even when you are offline. Files self-destruct after your set time.</p>
                 </button>
 
             </div>
@@ -255,44 +204,24 @@
             </div>
         </div>
 
-        <!-- VIEW: HOST SETUP (File Selection & Waiting for Quick/Mega/Device/Cloud) -->
+        <!-- VIEW: HOST SETUP (File Selection & Waiting for Quick/Mega/Device) -->
         <div id="view-setup" class="hidden flex flex-col gap-6 w-full">
             <div class="flex justify-between items-center mb-2">
                 <h2 id="setup-title" class="text-2xl font-bold">Setup</h2>
                 <button onclick="resetApp()" class="text-sm font-bold opacity-60 hover:opacity-100 transition">Cancel</button>
             </div>
 
-            <!-- File Input Area (For Quick/Mega/Cloud) -->
+            <!-- File Input Area (For Quick/Mega) -->
             <div id="setup-file-area" class="hidden flex flex-col gap-4">
                 <label for="host-file-input" class="panel p-10 flex flex-col items-center justify-center cursor-pointer hover:bg-[#2E3138]/5 transition border-dashed">
                     <span class="font-bold text-lg mb-1" id="setup-file-label">Select File</span>
                     <input type="file" id="host-file-input" class="hidden" onchange="handleSetupFiles(event)">
                 </label>
                 <div id="setup-selected-files" class="text-sm font-mono opacity-80"></div>
-
-                <!-- Custom Self-Destruct Timer Inputs (For Cloud Vault) -->
-                <div id="cloud-timer-selector" class="hidden flex flex-col gap-3 panel p-4">
-                    <label class="text-xs font-bold uppercase tracking-wider opacity-80">Self-Destruct Timer (Max 10 Days)</label>
-                    <div class="grid grid-cols-3 gap-3">
-                        <div class="flex flex-col gap-1">
-                            <span class="text-[11px] font-bold opacity-70">Days</span>
-                            <input type="number" id="expire-days" min="0" max="10" value="1" class="input-box p-2 font-bold text-center text-sm" onchange="validateTimerInputs()">
-                        </div>
-                        <div class="flex flex-col gap-1">
-                            <span class="text-[11px] font-bold opacity-70">Hours</span>
-                            <input type="number" id="expire-hours" min="0" max="23" value="0" class="input-box p-2 font-bold text-center text-sm" onchange="validateTimerInputs()">
-                        </div>
-                        <div class="flex flex-col gap-1">
-                            <span class="text-[11px] font-bold opacity-70">Minutes</span>
-                            <input type="number" id="expire-minutes" min="0" max="59" value="0" class="input-box p-2 font-bold text-center text-sm" onchange="validateTimerInputs()">
-                        </div>
-                    </div>
-                </div>
-
                 <button id="setup-start-btn" onclick="startHostSession()" class="btn-accent py-3 font-bold hidden">Generate Code</button>
             </div>
 
-            <!-- Code Display Area (Waiting/Cloud Success) -->
+            <!-- Code Display Area (Waiting) -->
             <div id="setup-waiting-area" class="hidden panel p-8 flex flex-col items-center justify-center text-center">
                 <p class="text-sm font-bold opacity-70 uppercase tracking-widest mb-1">Your Code</p>
                 <p id="display-code" class="text-6xl font-mono font-bold tracking-widest text-accent uppercase mb-4">---</p>
@@ -302,14 +231,9 @@
 
                 <p id="waiting-msg" class="text-sm font-semibold mb-6">Waiting for device to connect...</p>
 
-                <!-- Progress Bar for Cloud Upload -->
-                <div id="cloud-progress-container" class="w-full bg-[#2E3138]/10 border-2 border-text h-4 mb-6 hidden overflow-hidden">
-                    <div id="cloud-progress-bar" class="bg-accent h-full w-0 transition-all"></div>
-                </div>
-
-                <!-- Manual Close Button -->
+                <!-- Manual Close Button (Appears when transfers complete) -->
                 <button id="host-finish-btn" onclick="resetApp()" class="btn-accent py-3 px-8 font-bold text-lg mb-6 hidden">
-                    Done / Back to Home
+                    Done / Close Session
                 </button>
 
                 <!-- Keep Screen Awake Toggle Switch -->
@@ -399,19 +323,6 @@
         </div>
     </div>
 
-    <!-- MODAL: Firebase Setup (For GitHub Pages Deployment) -->
-    <div id="firebase-modal" class="hidden fixed inset-0 bg-[#F1E9DB]/95 flex items-center justify-center z-50 backdrop-blur-sm">
-        <div class="panel p-6 flex flex-col items-center max-w-md w-full mx-4">
-            <h3 class="text-xl font-bold mb-2">Cloud Vault Setup</h3>
-            <p class="text-sm opacity-80 mb-4 text-center">To use Cloud Vault on your custom website, paste your free Firebase Config JSON below:</p>
-            <textarea id="firebase-config-input" class="input-box p-3 mb-4 w-full h-32 text-xs font-mono" placeholder='{"apiKey": "AIzaSy...", "authDomain": "...", "projectId": "...", "storageBucket": "..."}'></textarea>
-            <div class="flex gap-2 w-full">
-                <button onclick="saveFirebaseConfig()" class="btn-accent px-4 py-2.5 font-bold flex-1">Save Config</button>
-                <button onclick="document.getElementById('firebase-modal').classList.add('hidden')" class="btn-outline px-4 py-2.5 font-bold">Cancel</button>
-            </div>
-        </div>
-    </div>
-
     <script>
         // --- Core State ---
         const PREFIX = 'zpdrp-v3-';
@@ -441,22 +352,6 @@
 
         let wakeLockSentinel = null;
 
-        function checkFirebaseReady() {
-            return window.fb && window.fb.initialized;
-        }
-
-        function saveFirebaseConfig() {
-            const raw = document.getElementById('firebase-config-input').value.trim();
-            if (!raw) return;
-            try {
-                const parsed = JSON.parse(raw);
-                localStorage.setItem('zipdrop_firebase_config', JSON.stringify(parsed));
-                location.reload();
-            } catch (e) {
-                alert("Invalid JSON format. Please paste your valid Firebase configuration object.");
-            }
-        }
-
         function isiPhone() {
             return /iPhone|iPad|iPod/i.test(navigator.userAgent) || 
                    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
@@ -480,35 +375,6 @@
                 }
             }
             return false;
-        }
-
-        function validateTimerInputs() {
-            let days = parseInt(document.getElementById('expire-days').value, 10) || 0;
-            let hours = parseInt(document.getElementById('expire-hours').value, 10) || 0;
-            let minutes = parseInt(document.getElementById('expire-minutes').value, 10) || 0;
-
-            if (days > 10) {
-                document.getElementById('expire-days').value = 10;
-                days = 10;
-            }
-            if (days === 10) {
-                document.getElementById('expire-hours').value = 0;
-                document.getElementById('expire-minutes').value = 0;
-            }
-        }
-
-        function getExpirationMillis() {
-            let days = parseInt(document.getElementById('expire-days').value, 10) || 0;
-            let hours = parseInt(document.getElementById('expire-hours').value, 10) || 0;
-            let minutes = parseInt(document.getElementById('expire-minutes').value, 10) || 0;
-
-            let totalMs = (days * 24 * 60 * 60 * 1000) + 
-                          (hours * 60 * 60 * 1000) + 
-                          (minutes * 60 * 1000);
-
-            if (totalMs <= 0) totalMs = 3600000;
-            const maxMs = 10 * 24 * 60 * 60 * 1000;
-            return Math.min(totalMs, maxMs);
         }
 
         async function toggleWakeLock(checkbox) {
@@ -587,11 +453,8 @@
             document.getElementById('group-file-log').innerHTML = '';
             document.getElementById('device-link-log').innerHTML = '';
             document.getElementById('host-finish-btn').classList.add('hidden');
-            document.getElementById('cloud-progress-container').classList.add('hidden');
-            document.getElementById('cloud-timer-selector').classList.add('hidden');
             document.getElementById('name-modal').classList.add('hidden');
             document.getElementById('qr-modal').classList.add('hidden');
-            document.getElementById('firebase-modal').classList.add('hidden');
             setStatus('Ready');
             window.history.replaceState({}, document.title, window.location.pathname);
             showView('view-home');
@@ -672,18 +535,12 @@
         }
 
         function initSetup(mode) {
-            if (mode === 'cloud' && !checkFirebaseReady()) {
-                document.getElementById('firebase-modal').classList.remove('hidden');
-                return;
-            }
-
             currentMode = mode;
             isHost = true;
             pendingFiles = [];
             document.getElementById('setup-start-btn').classList.add('hidden');
             document.getElementById('setup-selected-files').innerHTML = '';
             document.getElementById('host-finish-btn').classList.add('hidden');
-            document.getElementById('cloud-timer-selector').classList.add('hidden');
             
             if (mode === 'group') {
                 promptName(() => {
@@ -699,17 +556,13 @@
                 startHostSession();
             } else {
                 showView('view-setup');
-                document.getElementById('setup-title').innerText = mode === 'quick' ? 'Quick Share' : (mode === 'mega' ? 'Mega Transfer' : 'Cloud Vault');
+                document.getElementById('setup-title').innerText = mode === 'quick' ? 'Quick Share' : 'Mega Transfer';
                 document.getElementById('setup-file-area').classList.remove('hidden');
                 document.getElementById('setup-waiting-area').classList.add('hidden');
                 
                 const fileInput = document.getElementById('host-file-input');
                 fileInput.multiple = (mode === 'mega');
                 document.getElementById('setup-file-label').innerText = mode === 'mega' ? 'Select Multiple Files' : 'Select One File';
-
-                if (mode === 'cloud') {
-                    document.getElementById('cloud-timer-selector').classList.remove('hidden');
-                }
             }
         }
 
@@ -723,66 +576,6 @@
         }
 
         async function startHostSession() {
-            if (currentMode === 'cloud') {
-                if (!checkFirebaseReady()) {
-                    document.getElementById('firebase-modal').classList.remove('hidden');
-                    return;
-                }
-
-                document.getElementById('setup-file-area').classList.add('hidden');
-                document.getElementById('setup-waiting-area').classList.remove('hidden');
-                document.getElementById('display-code').innerText = '...';
-                document.getElementById('setup-qr-container').classList.add('hidden');
-                document.getElementById('cloud-progress-container').classList.remove('hidden');
-                document.getElementById('waiting-msg').innerText = "Uploading to Cloud Vault...";
-                setStatus('Uploading...');
-
-                currentCode = generateRandomCode();
-                const fileToUpload = pendingFiles[0];
-                const expireDuration = getExpirationMillis();
-                const expiresAt = Date.now() + expireDuration;
-
-                try {
-                    const storageRef = window.fb.ref(window.fb.storage, `artifacts/${window.fb.appId}/public/data/vault/${currentCode}_${fileToUpload.name}`);
-                    const uploadTask = window.fb.uploadBytesResumable(storageRef, fileToUpload);
-
-                    uploadTask.on('state_changed', 
-                        (snapshot) => {
-                            const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
-                            document.getElementById('cloud-progress-bar').style.width = `${progress}%`;
-                        }, 
-                        (error) => {
-                            triggerPopup("Cloud upload failed: " + error.message);
-                            resetApp();
-                        }, 
-                        async () => {
-                            const downloadUrl = await window.fb.getDownloadURL(uploadTask.snapshot.ref);
-                            
-                            await window.fb.setDoc(window.fb.doc(window.fb.db, 'artifacts', window.fb.appId, 'public', 'data', 'cloud_codes', currentCode), {
-                                name: fileToUpload.name,
-                                size: fileToUpload.size,
-                                mime: fileToUpload.type,
-                                url: downloadUrl,
-                                storagePath: storageRef.fullPath,
-                                expiresAt: expiresAt
-                            });
-
-                            document.getElementById('display-code').innerText = currentCode.toUpperCase();
-                            document.getElementById('waiting-msg').innerText = "Uploaded! Anyone can use this code to download even when you are offline.";
-                            document.getElementById('cloud-progress-container').classList.add('hidden');
-                            document.getElementById('setup-qr-container').classList.remove('hidden');
-                            document.getElementById('host-finish-btn').classList.remove('hidden');
-                            generateQR('setup-qr-container', currentCode);
-                            setStatus('Cloud Active');
-                        }
-                    );
-                } catch (err) {
-                    triggerPopup("Upload Error: " + err.message);
-                    resetApp();
-                }
-                return;
-            }
-
             document.getElementById('setup-file-area').classList.add('hidden');
             document.getElementById('setup-waiting-area').classList.remove('hidden');
             document.getElementById('display-code').innerText = '...';
@@ -875,55 +668,6 @@
             setStatus('Searching...');
             document.getElementById('join-code-input').value = '...';
             isHost = false;
-
-            if (checkFirebaseReady()) {
-                try {
-                    const cloudDocRef = window.fb.doc(window.fb.db, 'artifacts', window.fb.appId, 'public', 'data', 'cloud_codes', code);
-                    window.fb.getDoc(cloudDocRef).then(async (cloudDoc) => {
-                        if (cloudDoc.exists()) {
-                            const data = cloudDoc.data();
-                            
-                            if (Date.now() > data.expiresAt) {
-                                try {
-                                    await window.fb.deleteDoc(cloudDocRef);
-                                    await window.fb.deleteObject(window.fb.ref(window.fb.storage, data.storagePath));
-                                } catch (e) {}
-                                triggerPopup('This code has expired and self-destructed.');
-                                resetApp();
-                                return;
-                            }
-
-                            showView('view-receiver');
-                            document.getElementById('receiver-title').innerText = "Downloading Cloud File...";
-                            document.getElementById('receiver-status-msg').innerText = `Fetching ${data.name} (${formatBytes(data.size)})...`;
-
-                            const response = await fetch(data.url);
-                            const blob = await response.blob();
-                            
-                            let savedToPhotos = false;
-                            const isImage = data.mime && data.mime.startsWith('image/');
-                            if (isImage && isiPhone()) {
-                                savedToPhotos = await handleImageSave(blob, data.name);
-                            }
-                            if (!savedToPhotos) {
-                                downloadBlob(blob, data.name);
-                            }
-
-                            setStatus('Transfer Complete');
-                            document.getElementById('receiver-title').innerText = "Transfer Complete";
-                            document.getElementById('receiver-status-msg').innerText = `${data.name} downloaded successfully!`;
-                            return;
-                        }
-
-                        startWebRTCJoin(code);
-                    }).catch(() => {
-                        startWebRTCJoin(code);
-                    });
-                    return;
-                } catch (err) {
-                    console.log("Cloud lookup fallback to WebRTC:", err);
-                }
-            }
 
             startWebRTCJoin(code);
         }
