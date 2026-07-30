@@ -37,6 +37,49 @@
     <!-- JSZip for client-side file compression -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 
+    <!-- Firebase SDKs -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, getDoc, deleteDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getStorage, ref, uploadBytesResumable, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
+
+        // Firebase Configuration provided by execution environment or fallback
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
+            apiKey: "",
+            authDomain: "zipdrop-app.firebaseapp.com",
+            projectId: "zipdrop-app",
+            storageBucket: "zipdrop-app.appspot.com",
+            messagingSenderId: "123456789",
+            appId: "1:123456789:web:abcdef123456"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+        const storage = getStorage(app);
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+
+        // Auth initialization
+        async function initAuth() {
+            try {
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                } else {
+                    await signInAnonymously(auth);
+                }
+            } catch (err) {
+                console.error("Firebase auth error:", err);
+            }
+        }
+        initAuth();
+
+        // Export Firebase functions to window for UI script usage
+        window.fb = {
+            db, storage, auth, appId, doc, setDoc, getDoc, deleteDoc, ref, uploadBytesResumable, getDownloadURL, deleteObject
+        };
+    </script>
+
     <script>
         tailwind.config = {
             theme: {
@@ -189,6 +232,14 @@
                     <p class="text-sm opacity-80">Select many files. Automatically compresses into a ZIP and sends.</p>
                 </button>
 
+                <button onclick="initSetup('cloud')" class="panel p-6 text-left hover:bg-[#2E3138]/5 transition sm:col-span-2 border-accent">
+                    <div class="flex justify-between items-start">
+                        <h2 class="text-xl font-bold mb-2 text-accent">Cloud Vault (Offline Share)</h2>
+                        <span class="text-[10px] uppercase tracking-widest font-bold bg-accent text-base px-2 py-0.5 rounded border border-text">Self-Destruct</span>
+                    </div>
+                    <p class="text-sm opacity-80">Upload a file to the cloud. Recipient can download using code even when you are offline.</p>
+                </button>
+
             </div>
         </div>
 
@@ -204,24 +255,35 @@
             </div>
         </div>
 
-        <!-- VIEW: HOST SETUP (File Selection & Waiting for Quick/Mega/Device) -->
+        <!-- VIEW: HOST SETUP (File Selection & Waiting for Quick/Mega/Device/Cloud) -->
         <div id="view-setup" class="hidden flex flex-col gap-6 w-full">
             <div class="flex justify-between items-center mb-2">
                 <h2 id="setup-title" class="text-2xl font-bold">Setup</h2>
                 <button onclick="resetApp()" class="text-sm font-bold opacity-60 hover:opacity-100 transition">Cancel</button>
             </div>
 
-            <!-- File Input Area (For Quick/Mega) -->
+            <!-- File Input Area (For Quick/Mega/Cloud) -->
             <div id="setup-file-area" class="hidden flex flex-col gap-4">
                 <label for="host-file-input" class="panel p-10 flex flex-col items-center justify-center cursor-pointer hover:bg-[#2E3138]/5 transition border-dashed">
                     <span class="font-bold text-lg mb-1" id="setup-file-label">Select File</span>
                     <input type="file" id="host-file-input" class="hidden" onchange="handleSetupFiles(event)">
                 </label>
                 <div id="setup-selected-files" class="text-sm font-mono opacity-80"></div>
+
+                <!-- Self Destruct Timer Selector (For Cloud Vault) -->
+                <div id="cloud-timer-selector" class="hidden flex flex-col gap-2 panel p-4">
+                    <label class="text-xs font-bold uppercase tracking-wider opacity-80">Self-Destruct Timer</label>
+                    <select id="cloud-expire-time" class="input-box p-2 font-bold text-sm bg-[#F1E9DB]">
+                        <option value="3600000">1 Hour</option>
+                        <option value="86400000" selected>24 Hours</option>
+                        <option value="604800000">7 Days</option>
+                    </select>
+                </div>
+
                 <button id="setup-start-btn" onclick="startHostSession()" class="btn-accent py-3 font-bold hidden">Generate Code</button>
             </div>
 
-            <!-- Code Display Area (Waiting) -->
+            <!-- Code Display Area (Waiting/Cloud Success) -->
             <div id="setup-waiting-area" class="hidden panel p-8 flex flex-col items-center justify-center text-center">
                 <p class="text-sm font-bold opacity-70 uppercase tracking-widest mb-1">Your Code</p>
                 <p id="display-code" class="text-6xl font-mono font-bold tracking-widest text-accent uppercase mb-4">---</p>
@@ -231,13 +293,18 @@
 
                 <p id="waiting-msg" class="text-sm font-semibold mb-6">Waiting for device to connect...</p>
 
-                <!-- Manual Close Button (Appears when transfers complete) -->
+                <!-- Progress Bar for Cloud Upload -->
+                <div id="cloud-progress-container" class="w-full bg-[#2E3138]/10 border-2 border-text h-4 mb-6 hidden overflow-hidden">
+                    <div id="cloud-progress-bar" class="bg-accent h-full w-0 transition-all"></div>
+                </div>
+
+                <!-- Manual Close Button -->
                 <button id="host-finish-btn" onclick="resetApp()" class="btn-accent py-3 px-8 font-bold text-lg mb-6 hidden">
-                    Done / Close Session
+                    Done / Back to Home
                 </button>
 
                 <!-- Keep Screen Awake Toggle Switch -->
-                <div class="w-full pt-4 border-t-2 border-text/20 flex items-center justify-between px-2">
+                <div id="wakelock-container" class="w-full pt-4 border-t-2 border-text/20 flex items-center justify-between px-2">
                     <span class="text-xs font-bold uppercase tracking-wider opacity-80">Keep Screen Awake</span>
                     <label class="switch">
                         <input type="checkbox" id="wakelock-toggle" onchange="toggleWakeLock(this)">
@@ -342,7 +409,7 @@
 
         let peer = null;
         let connections = []; 
-        let currentMode = null; 
+        let currentMode = null; // 'group', 'quick', 'device', 'mega', 'cloud'
         let currentCode = null;
         let isHost = false;
         let pendingFiles = [];
@@ -456,6 +523,8 @@
             document.getElementById('group-file-log').innerHTML = '';
             document.getElementById('device-link-log').innerHTML = '';
             document.getElementById('host-finish-btn').classList.add('hidden');
+            document.getElementById('cloud-progress-container').classList.add('hidden');
+            document.getElementById('cloud-timer-selector').classList.add('hidden');
             document.getElementById('name-modal').classList.add('hidden');
             document.getElementById('qr-modal').classList.add('hidden');
             setStatus('Ready');
@@ -544,6 +613,7 @@
             document.getElementById('setup-start-btn').classList.add('hidden');
             document.getElementById('setup-selected-files').innerHTML = '';
             document.getElementById('host-finish-btn').classList.add('hidden');
+            document.getElementById('cloud-timer-selector').classList.add('hidden');
             
             if (mode === 'group') {
                 promptName(() => {
@@ -559,13 +629,17 @@
                 startHostSession();
             } else {
                 showView('view-setup');
-                document.getElementById('setup-title').innerText = mode === 'quick' ? 'Quick Share' : 'Mega Transfer';
+                document.getElementById('setup-title').innerText = mode === 'quick' ? 'Quick Share' : (mode === 'mega' ? 'Mega Transfer' : 'Cloud Vault (Offline Share)');
                 document.getElementById('setup-file-area').classList.remove('hidden');
                 document.getElementById('setup-waiting-area').classList.add('hidden');
                 
                 const fileInput = document.getElementById('host-file-input');
                 fileInput.multiple = (mode === 'mega');
                 document.getElementById('setup-file-label').innerText = mode === 'mega' ? 'Select Multiple Files' : 'Select One File';
+
+                if (mode === 'cloud') {
+                    document.getElementById('cloud-timer-selector').classList.remove('hidden');
+                }
             }
         }
 
@@ -578,7 +652,65 @@
             }
         }
 
-        function startHostSession() {
+        async function startHostSession() {
+            if (currentMode === 'cloud') {
+                // Cloud Vault Upload Process
+                document.getElementById('setup-file-area').classList.add('hidden');
+                document.getElementById('setup-waiting-area').classList.remove('hidden');
+                document.getElementById('display-code').innerText = '...';
+                document.getElementById('setup-qr-container').classList.add('hidden');
+                document.getElementById('cloud-progress-container').classList.remove('hidden');
+                document.getElementById('waiting-msg').innerText = "Uploading to Cloud Vault...";
+                setStatus('Uploading...');
+
+                currentCode = generateRandomCode();
+                const fileToUpload = pendingFiles[0];
+                const expireDuration = parseInt(document.getElementById('cloud-expire-time').value, 10);
+                const expiresAt = Date.now() + expireDuration;
+
+                try {
+                    const storageRef = window.fb.ref(window.fb.storage, `artifacts/${window.fb.appId}/public/data/vault/${currentCode}_${fileToUpload.name}`);
+                    const uploadTask = window.fb.uploadBytesResumable(storageRef, fileToUpload);
+
+                    uploadTask.on('state_changed', 
+                        (snapshot) => {
+                            const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
+                            document.getElementById('cloud-progress-bar').style.width = `${progress}%`;
+                        }, 
+                        (error) => {
+                            triggerPopup("Cloud upload failed: " + error.message);
+                            resetApp();
+                        }, 
+                        async () => {
+                            const downloadUrl = await window.fb.getDownloadURL(uploadTask.snapshot.ref);
+                            
+                            // Save Metadata to Firestore
+                            await window.fb.setDoc(window.fb.doc(window.fb.db, 'artifacts', window.fb.appId, 'public', 'data', 'cloud_codes', currentCode), {
+                                name: fileToUpload.name,
+                                size: fileToUpload.size,
+                                mime: fileToUpload.type,
+                                url: downloadUrl,
+                                storagePath: storageRef.fullPath,
+                                expiresAt: expiresAt
+                            });
+
+                            document.getElementById('display-code').innerText = currentCode.toUpperCase();
+                            document.getElementById('waiting-msg').innerText = "Uploaded! Anyone can use this code to download even when you are offline.";
+                            document.getElementById('cloud-progress-container').classList.add('hidden');
+                            document.getElementById('setup-qr-container').classList.remove('hidden');
+                            document.getElementById('host-finish-btn').classList.remove('hidden');
+                            generateQR('setup-qr-container', currentCode);
+                            setStatus('Cloud Active');
+                        }
+                    );
+                } catch (err) {
+                    triggerPopup("Upload Error: " + err.message);
+                    resetApp();
+                }
+                return;
+            }
+
+            // WebRTC Host Session Process (Quick / Mega / Device / Group)
             document.getElementById('setup-file-area').classList.add('hidden');
             document.getElementById('setup-waiting-area').classList.remove('hidden');
             document.getElementById('display-code').innerText = '...';
@@ -663,20 +795,66 @@
             });
         }
 
-        function joinCode() {
+        async function joinCode() {
             const code = document.getElementById('join-code-input').value.trim().toLowerCase();
             if (code.length !== 3) return;
 
             currentCode = code;
-            setStatus('Connecting...');
+            setStatus('Searching...');
             document.getElementById('join-code-input').value = '...';
             isHost = false;
 
-            // Timeout guard if host doesn't exist yet or connection stalls
+            // First check if this is a Cloud Vault Code in Firestore
+            try {
+                const cloudDocRef = window.fb.doc(window.fb.db, 'artifacts', window.fb.appId, 'public', 'data', 'cloud_codes', code);
+                const cloudDoc = await window.fb.getDoc(cloudDocRef);
+
+                if (cloudDoc.exists()) {
+                    const data = cloudDoc.data();
+                    
+                    // Check if self-destruct time has passed
+                    if (Date.now() > data.expiresAt) {
+                        // Delete expired record & file
+                        try {
+                            await window.fb.deleteDoc(cloudDocRef);
+                            await window.fb.deleteObject(window.fb.ref(window.fb.storage, data.storagePath));
+                        } catch (e) {}
+                        triggerPopup('This code has expired and self-destructed.');
+                        resetApp();
+                        return;
+                    }
+
+                    // Download Cloud Vault File
+                    showView('view-receiver');
+                    document.getElementById('receiver-title').innerText = "Downloading Cloud File...";
+                    document.getElementById('receiver-status-msg').innerText = `Fetching ${data.name} (${formatBytes(data.size)})...`;
+
+                    const response = await fetch(data.url);
+                    const blob = await response.blob();
+                    
+                    let savedToPhotos = false;
+                    const isImage = data.mime && data.mime.startsWith('image/');
+                    if (isImage && isiPhone()) {
+                        savedToPhotos = await handleImageSave(blob, data.name);
+                    }
+                    if (!savedToPhotos) {
+                        downloadBlob(blob, data.name);
+                    }
+
+                    setStatus('Transfer Complete');
+                    document.getElementById('receiver-title').innerText = "Transfer Complete";
+                    document.getElementById('receiver-status-msg').innerText = `${data.name} downloaded successfully!`;
+                    return;
+                }
+            } catch (err) {
+                console.log("Cloud lookup fallback to WebRTC:", err);
+            }
+
+            // Fallback to P2P WebRTC Connection
             if (joinTimeoutTimer) clearTimeout(joinTimeoutTimer);
             joinTimeoutTimer = setTimeout(() => {
                 if (connections.length === 0 || !connections[0].open) {
-                    triggerPopup('Connection timed out. Please check the code and ensure host screen is open.');
+                    triggerPopup('Code not found or host screen closed.');
                     resetApp();
                 }
             }, 12000);
