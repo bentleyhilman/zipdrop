@@ -224,7 +224,7 @@
             <!-- Code Display Area (Waiting) -->
             <div id="setup-waiting-area" class="hidden panel p-8 flex flex-col items-center justify-center text-center">
                 <p class="text-sm font-bold opacity-70 uppercase tracking-widest mb-1">Your Code</p>
-                <p id="display-code" class="text-6xl font-mono font-bold tracking-widest text-accent mb-4">---</p>
+                <p id="display-code" class="text-6xl font-mono font-bold tracking-widest text-accent uppercase mb-4">---</p>
                 
                 <!-- QR Code displays here for non-groups -->
                 <div id="setup-qr-container" class="mb-4 p-3 bg-white border-2 border-text hidden"></div>
@@ -421,7 +421,7 @@
             const params = new URLSearchParams(window.location.search);
             const codeParam = params.get('code');
             if (codeParam && codeParam.length === 3) {
-                document.getElementById('join-code-input').value = codeParam.toLowerCase();
+                document.getElementById('join-code-input').value = codeParam.toUpperCase();
                 joinCode();
             }
         };
@@ -519,7 +519,7 @@
         function generateQR(containerId, codeText) {
             const container = document.getElementById(containerId);
             container.innerHTML = '';
-            const url = window.location.origin + window.location.pathname + '?code=' + codeText;
+            const url = window.location.origin + window.location.pathname + '?code=' + codeText.toUpperCase();
             new QRCode(container, {
                 text: url,
                 width: 130,
@@ -589,11 +589,11 @@
             peer = new Peer(PREFIX + currentCode, peerConfig);
 
             peer.on('open', (id) => {
-                document.getElementById('display-code').innerText = currentCode;
+                document.getElementById('display-code').innerText = currentCode.toUpperCase();
                 setStatus('Hosting');
                 
                 if (currentMode === 'group') {
-                    document.getElementById('group-code-header').innerText = currentCode;
+                    document.getElementById('group-code-header').innerText = currentCode.toUpperCase();
                     showView('view-group');
                     addLog('group-chat-log', `<div class="text-xs font-bold opacity-50 text-center my-2">Group created by ${myUsername}</div>`);
                 } else {
@@ -733,7 +733,7 @@
                 }
                 else if (currentMode === 'group') {
                     promptName(() => {
-                        document.getElementById('group-code-header').innerText = currentCode;
+                        document.getElementById('group-code-header').innerText = currentCode.toUpperCase();
                         showView('view-group');
                         sourceConn.send({ type: 'system', msg: `${myUsername} joined the group` });
                     });
