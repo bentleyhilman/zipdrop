@@ -8,6 +8,8 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- PeerJS for serverless WebRTC -->
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <!-- QRCode.js for generating QR Codes -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 
     <script>
         tailwind.config = {
@@ -36,7 +38,7 @@
         
         .panel {
             border: 2px solid #2E3138;
-            background-color: transparent;
+            background-color: #F1E9DB;
         }
 
         .btn-accent {
@@ -83,11 +85,11 @@
 
     <!-- Header -->
     <header class="w-full max-w-2xl flex justify-between items-end mb-12">
-        <h1 class="text-4xl font-bold tracking-tight cursor-pointer" onclick="resetApp()">ZipDrop</h1>
+        <h1 class="text-4xl font-bold tracking-tight cursor-pointer hover:opacity-80 transition" onclick="resetApp()">ZipDrop</h1>
         <span id="global-status" class="text-sm font-semibold opacity-70">Ready</span>
     </header>
 
-    <main id="app-container" class="w-full max-w-2xl w-full">
+    <main id="app-container" class="w-full max-w-2xl">
 
         <!-- VIEW: HOME -->
         <div id="view-home" class="flex flex-col gap-8 w-full">
@@ -127,7 +129,7 @@
         <div id="view-setup" class="hidden flex flex-col gap-6 w-full">
             <div class="flex justify-between items-center mb-2">
                 <h2 id="setup-title" class="text-2xl font-bold">Setup</h2>
-                <button onclick="resetApp()" class="text-sm font-bold opacity-60 hover:opacity-100">Cancel</button>
+                <button onclick="resetApp()" class="text-sm font-bold opacity-60 hover:opacity-100 transition">Cancel</button>
             </div>
 
             <!-- File Input Area (For Quick/Mega) -->
@@ -141,24 +143,30 @@
             </div>
 
             <!-- Code Display Area (Waiting) -->
-            <div id="setup-waiting-area" class="hidden panel p-12 flex flex-col items-center justify-center text-center">
+            <div id="setup-waiting-area" class="hidden panel p-10 flex flex-col items-center justify-center text-center">
                 <p class="text-sm font-bold opacity-70 uppercase tracking-widest mb-2">Your Code</p>
                 <p id="display-code" class="text-7xl font-mono font-bold tracking-widest text-accent mb-6">---</p>
+                
+                <!-- QR Code displays here for non-groups -->
+                <div id="setup-qr-container" class="mb-6 p-4 bg-white border-2 border-text hidden"></div>
+
                 <p id="waiting-msg" class="text-sm font-semibold">Waiting for device to connect...</p>
             </div>
         </div>
 
         <!-- VIEW: ACTIVE GROUP -->
-        <div id="view-group" class="hidden flex flex-col h-[70vh] panel w-full overflow-hidden">
+        <div id="view-group" class="hidden flex flex-col h-[75vh] panel w-full overflow-hidden">
             <div class="p-4 border-b-2 border-text flex justify-between items-center bg-[#2E3138]/5">
-                <span class="font-bold">Group: <span id="group-code-header" class="font-mono text-accent uppercase"></span></span>
-                <button onclick="resetApp()" class="text-sm font-bold opacity-70 hover:opacity-100">Leave</button>
+                <span class="font-bold cursor-pointer hover:opacity-70 transition flex items-center gap-2" onclick="showQRModal()">
+                    Group: <span id="group-code-header" class="font-mono text-accent uppercase underline decoration-2 underline-offset-4"></span>
+                </span>
+                <button onclick="resetApp()" class="text-sm font-bold opacity-70 hover:opacity-100 transition">Leave</button>
             </div>
             
             <div class="flex-grow flex flex-col sm:flex-row overflow-hidden">
                 <!-- Chat Area -->
                 <div class="flex-grow flex flex-col border-b-2 sm:border-b-0 sm:border-r-2 border-text h-1/2 sm:h-full">
-                    <div id="group-chat-log" class="flex-grow p-4 overflow-y-auto flex flex-col gap-2"></div>
+                    <div id="group-chat-log" class="flex-grow p-4 overflow-y-auto flex flex-col gap-3"></div>
                     <div class="flex border-t-2 border-text">
                         <input type="text" id="group-chat-input" placeholder="Message..." class="input-box border-none w-full p-3 font-medium">
                         <button onclick="sendGroupChat()" class="btn-accent border-none border-l-2 px-6 font-bold">Send</button>
@@ -166,10 +174,10 @@
                 </div>
 
                 <!-- Files Area -->
-                <div class="w-full sm:w-64 flex flex-col h-1/2 sm:h-full">
+                <div class="w-full sm:w-72 flex flex-col h-1/2 sm:h-full bg-[#F1E9DB]">
                     <div class="p-3 border-b-2 border-text font-bold text-sm bg-[#2E3138]/5">Shared Files</div>
-                    <div id="group-file-log" class="flex-grow p-3 overflow-y-auto flex flex-col gap-2"></div>
-                    <label class="btn-outline border-none border-t-2 p-3 text-center cursor-pointer font-bold block">
+                    <div id="group-file-log" class="flex-grow p-3 overflow-y-auto flex flex-col gap-3"></div>
+                    <label class="btn-outline border-none border-t-2 p-3 text-center cursor-pointer font-bold block bg-[#F1E9DB]">
                         Upload File
                         <input type="file" class="hidden" onchange="sendGroupFile(event)">
                     </label>
@@ -181,7 +189,7 @@
         <div id="view-device-link" class="hidden flex flex-col h-[60vh] w-full">
             <div class="flex justify-between items-center mb-4">
                 <h2 class="text-2xl font-bold">Device Link Active</h2>
-                <button onclick="resetApp()" class="text-sm font-bold opacity-60 hover:opacity-100">Disconnect</button>
+                <button onclick="resetApp()" class="text-sm font-bold opacity-60 hover:opacity-100 transition">Disconnect</button>
             </div>
             <label id="device-dropzone" class="panel flex-grow flex flex-col items-center justify-center cursor-pointer hover:bg-[#2E3138]/5 transition relative">
                 <input type="file" class="hidden" multiple onchange="sendDeviceLinkFile(event)">
@@ -193,14 +201,48 @@
 
     </main>
 
+    <!-- MODAL: Enter Name -->
+    <div id="name-modal" class="hidden fixed inset-0 bg-[#F1E9DB]/90 flex items-center justify-center z-50 backdrop-blur-sm">
+        <div class="panel p-8 flex flex-col items-center max-w-sm w-full mx-4">
+            <h3 class="text-xl font-bold mb-2">Join Group</h3>
+            <p class="text-sm opacity-70 mb-6 text-center">Enter a name so others know who you are.</p>
+            <input type="text" id="username-input" class="input-box p-3 mb-4 w-full text-center font-bold text-lg" placeholder="Your Name" maxlength="16">
+            <button onclick="submitName()" class="btn-accent px-6 py-3 font-bold w-full text-lg">Continue</button>
+        </div>
+    </div>
+
+    <!-- MODAL: Group QR Code -->
+    <div id="qr-modal" class="hidden fixed inset-0 bg-[#F1E9DB]/90 flex items-center justify-center z-50 backdrop-blur-sm">
+        <div class="panel p-8 flex flex-col items-center max-w-sm w-full mx-4">
+            <h3 class="text-xl font-bold mb-2">Group QR Code</h3>
+            <p class="text-sm opacity-70 mb-6 text-center">Scan to instantly join this group.</p>
+            <div id="modal-qr-container" class="mb-6 p-4 bg-white border-2 border-text shadow-sm"></div>
+            <button onclick="document.getElementById('qr-modal').classList.add('hidden')" class="btn-outline px-6 py-2 font-bold w-full">Close</button>
+        </div>
+    </div>
+
     <script>
         // --- Core State ---
-        const PREFIX = 'zpdrp-v2-';
+        const PREFIX = 'zpdrp-v3-';
         let peer = null;
         let connections = []; // Array for Groups, single connection for others
         let currentMode = null; // 'group', 'quick', 'device', 'mega'
+        let currentCode = null;
         let isHost = false;
-        let pendingFiles = []; // Files selected during setup
+        let pendingFiles = [];
+        
+        let myUsername = 'Anonymous';
+        let nameCallback = null;
+
+        // Auto-join via URL if code is present
+        window.onload = () => {
+            const params = new URLSearchParams(window.location.search);
+            const codeParam = params.get('code');
+            if (codeParam && codeParam.length === 3) {
+                document.getElementById('join-code-input').value = codeParam.toLowerCase();
+                joinCode();
+            }
+        };
 
         // --- View Management ---
         function showView(viewId) {
@@ -216,6 +258,7 @@
             if (peer) peer.destroy();
             connections = [];
             currentMode = null;
+            currentCode = null;
             isHost = false;
             pendingFiles = [];
             document.getElementById('join-code-input').value = '';
@@ -223,9 +266,33 @@
             document.getElementById('group-chat-log').innerHTML = '';
             document.getElementById('group-file-log').innerHTML = '';
             document.getElementById('device-link-log').innerHTML = '';
+            document.getElementById('name-modal').classList.add('hidden');
+            document.getElementById('qr-modal').classList.add('hidden');
             setStatus('Ready');
+            // Remove URL parameter purely visually
+            window.history.replaceState({}, document.title, window.location.pathname);
             showView('view-home');
         }
+
+        // --- User Name Flow ---
+        function promptName(callback) {
+            document.getElementById('username-input').value = '';
+            document.getElementById('name-modal').classList.remove('hidden');
+            document.getElementById('username-input').focus();
+            nameCallback = callback;
+        }
+
+        function submitName() {
+            const input = document.getElementById('username-input');
+            let name = input.value.trim();
+            if (name) myUsername = name;
+            document.getElementById('name-modal').classList.add('hidden');
+            if (nameCallback) nameCallback();
+        }
+
+        document.getElementById('username-input').addEventListener('keypress', function (e) {
+            if (e.key === 'Enter') submitName();
+        });
 
         // --- Helpers ---
         function generateRandomCode() {
@@ -251,7 +318,7 @@
         }
 
         function triggerPopup(msg) {
-            alert(msg); // Minimal native popup as requested for simplicity
+            alert(msg);
         }
 
         function addLog(containerId, html) {
@@ -262,6 +329,28 @@
             container.scrollTop = container.scrollHeight;
         }
 
+        // --- QR Code Generators ---
+        function generateQR(containerId, codeText) {
+            const container = document.getElementById(containerId);
+            container.innerHTML = ''; // Clear previous
+            const url = window.location.origin + window.location.pathname + '?code=' + codeText;
+            new QRCode(container, {
+                text: url,
+                width: 140,
+                height: 140,
+                colorDark: "#2E3138",
+                colorLight: "#ffffff",
+                correctLevel: QRCode.CorrectLevel.M
+            });
+        }
+
+        function showQRModal() {
+            if (currentCode) {
+                generateQR('modal-qr-container', currentCode);
+                document.getElementById('qr-modal').classList.remove('hidden');
+            }
+        }
+
         // --- Process: Host Setup ---
         function initSetup(mode) {
             currentMode = mode;
@@ -270,13 +359,20 @@
             document.getElementById('setup-start-btn').classList.add('hidden');
             document.getElementById('setup-selected-files').innerHTML = '';
             
-            showView('view-setup');
-
-            if (mode === 'group' || mode === 'device') {
+            if (mode === 'group') {
+                promptName(() => {
+                    showView('view-setup');
+                    document.getElementById('setup-file-area').classList.add('hidden');
+                    document.getElementById('setup-title').innerText = 'Start Group';
+                    startHostSession();
+                });
+            } else if (mode === 'device') {
+                showView('view-setup');
                 document.getElementById('setup-file-area').classList.add('hidden');
-                document.getElementById('setup-title').innerText = mode === 'group' ? 'Start Group' : 'Start Device Link';
-                startHostSession(); // Skip file selection, jump straight to code gen
+                document.getElementById('setup-title').innerText = 'Start Device Link';
+                startHostSession();
             } else {
+                showView('view-setup');
                 document.getElementById('setup-title').innerText = mode === 'quick' ? 'Quick Share' : 'Mega Transfer';
                 document.getElementById('setup-file-area').classList.remove('hidden');
                 document.getElementById('setup-waiting-area').classList.add('hidden');
@@ -300,20 +396,25 @@
             document.getElementById('setup-file-area').classList.add('hidden');
             document.getElementById('setup-waiting-area').classList.remove('hidden');
             document.getElementById('display-code').innerText = '...';
+            document.getElementById('setup-qr-container').classList.add('hidden');
             setStatus('Generating Code...');
 
-            const code = generateRandomCode();
-            
-            peer = new Peer(PREFIX + code);
+            currentCode = generateRandomCode();
+            peer = new Peer(PREFIX + currentCode);
 
             peer.on('open', (id) => {
-                document.getElementById('display-code').innerText = code;
+                document.getElementById('display-code').innerText = currentCode;
                 setStatus('Hosting');
                 
                 if (currentMode === 'group') {
-                    // Instantly open group view for host, others will join
-                    document.getElementById('group-code-header').innerText = code;
+                    // Instantly open group view for host, skip waiting screen
+                    document.getElementById('group-code-header').innerText = currentCode;
                     showView('view-group');
+                    addLog('group-chat-log', `<div class="text-xs font-bold opacity-50 text-center my-2">Group created by ${myUsername}</div>`);
+                } else {
+                    // Show QR Code on setup waiting screen for other modes
+                    document.getElementById('setup-qr-container').classList.remove('hidden');
+                    generateQR('setup-qr-container', currentCode);
                 }
             });
 
@@ -330,17 +431,15 @@
 
         function setupHostConnectionLogic(conn) {
             conn.on('open', () => {
-                // Tell the guest what type of session this is
+                // Handshake sends mode
                 conn.send({ type: 'handshake', mode: currentMode });
 
                 if (currentMode === 'quick') {
-                    // Send file immediately
                     sendFileRaw(conn, pendingFiles[0]);
                     document.getElementById('waiting-msg').innerText = "File Sent!";
-                    setTimeout(resetApp, 2000); // Host finishes
+                    setTimeout(resetApp, 2000); 
                 } 
                 else if (currentMode === 'mega') {
-                    // Send all files sequentially
                     document.getElementById('waiting-msg').innerText = `Sending ${pendingFiles.length} files...`;
                     pendingFiles.forEach(f => sendFileRaw(conn, f));
                     document.getElementById('waiting-msg').innerText = "All Files Sent!";
@@ -350,9 +449,6 @@
                     showView('view-device-link');
                     setupDeviceLinkDragDrop(conn);
                 }
-                else if (currentMode === 'group') {
-                    addLog('group-chat-log', `<div class="text-xs font-mono opacity-50 text-center my-2">User joined</div>`);
-                }
             });
 
             conn.on('data', (data) => {
@@ -361,8 +457,10 @@
 
             conn.on('close', () => {
                 connections = connections.filter(c => c !== conn);
-                if (currentMode === 'device') resetApp(); // Kill session if 1-to-1 ends
-                if (currentMode === 'group') addLog('group-chat-log', `<div class="text-xs font-mono opacity-50 text-center my-2">User left</div>`);
+                if (currentMode === 'device') resetApp(); 
+                if (currentMode === 'group') {
+                    addLog('group-chat-log', `<div class="text-xs font-bold opacity-50 text-center my-2">A user disconnected</div>`);
+                }
             });
         }
 
@@ -371,6 +469,7 @@
             const code = document.getElementById('join-code-input').value.trim().toLowerCase();
             if (code.length !== 3) return;
 
+            currentCode = code;
             setStatus('Connecting...');
             document.getElementById('join-code-input').value = '...';
             isHost = false;
@@ -402,12 +501,11 @@
 
         // --- Core Data Handling (Router) ---
         function handleIncomingData(sourceConn, data) {
-            // Handshake (Guest receives session type from host)
+            // Handshake routing
             if (data.type === 'handshake') {
                 currentMode = data.mode;
                 if (currentMode === 'quick' || currentMode === 'mega') {
                     setStatus('Receiving...');
-                    // UI stays on home for seamless download as requested
                     document.getElementById('join-code-input').value = 'Receiving...';
                 }
                 else if (currentMode === 'device') {
@@ -415,19 +513,39 @@
                     setupDeviceLinkDragDrop(sourceConn);
                 }
                 else if (currentMode === 'group') {
-                    document.getElementById('group-code-header').innerText = 'Joined';
-                    showView('view-group');
+                    promptName(() => {
+                        document.getElementById('group-code-header').innerText = currentCode;
+                        showView('view-group');
+                        // Announce join to group
+                        sourceConn.send({ type: 'system', msg: `${myUsername} joined the group` });
+                    });
                 }
                 return;
             }
 
-            // Chat Message (Group)
-            if (data.type === 'chat') {
+            // System Message (Join/Leave)
+            if (data.type === 'system') {
                 if (isHost && currentMode === 'group') {
-                    // Host forwards to other peers
                     connections.forEach(c => { if(c !== sourceConn) c.send(data); });
                 }
-                addLog('group-chat-log', `<div class="p-2 border-2 border-[#2E3138] rounded bg-white w-fit max-w-[80%]">${data.msg}</div>`);
+                addLog('group-chat-log', `<div class="text-[11px] font-bold opacity-60 text-center my-2">${data.msg}</div>`);
+            }
+
+            // Chat Message 
+            if (data.type === 'chat') {
+                if (isHost && currentMode === 'group') {
+                    connections.forEach(c => { if(c !== sourceConn) c.send(data); });
+                }
+                
+                const isSelf = data.sender === myUsername;
+                addLog('group-chat-log', `
+                    <div class="flex flex-col w-fit max-w-[85%] ${isSelf ? 'self-end items-end' : 'self-start items-start'}">
+                        <span class="text-[10px] font-bold opacity-60 mb-0.5 px-1">${data.sender}</span>
+                        <div class="p-2 border-2 border-[#2E3138] rounded-md ${isSelf ? 'bg-accent text-[#F1E9DB]' : 'bg-[#F1E9DB] text-[#2E3138]'}">
+                            ${data.msg}
+                        </div>
+                    </div>
+                `);
             }
 
             // Raw File 
@@ -446,15 +564,17 @@
                 }
                 else if (currentMode === 'group') {
                     if (isHost) {
-                        // Host forwards file to others
                         connections.forEach(c => { if(c !== sourceConn) c.send(data); });
                     }
                     const url = URL.createObjectURL(blob);
                     addLog('group-file-log', `
-                        <div class="p-2 border-2 border-[#2E3138] flex flex-col gap-1">
+                        <div class="p-2 border-2 border-[#2E3138] flex flex-col gap-1 bg-[#2E3138]/5 rounded-md">
                             <span class="font-bold text-xs truncate">${data.name}</span>
-                            <span class="font-mono text-[10px]">${formatBytes(data.size)}</span>
-                            <a href="${url}" download="${data.name}" class="btn-accent text-center text-xs py-1 mt-1 font-bold">Download</a>
+                            <span class="text-[10px] font-bold opacity-70">Shared by ${data.sender}</span>
+                            <div class="flex justify-between items-end mt-1">
+                                <span class="font-mono text-[10px] font-bold opacity-80">${formatBytes(data.size)}</span>
+                                <a href="${url}" download="${data.name}" class="btn-accent text-center text-[11px] py-1 px-3 font-bold">Download</a>
+                            </div>
                         </div>
                     `);
                 }
@@ -470,6 +590,7 @@
                     name: file.name,
                     size: file.size,
                     mime: file.type,
+                    sender: myUsername,
                     buffer: e.target.result
                 });
             };
@@ -482,9 +603,18 @@
             const msg = input.value.trim();
             if (!msg) return;
 
-            const packet = { type: 'chat', msg: msg };
+            const packet = { type: 'chat', msg: msg, sender: myUsername };
             connections.forEach(c => c.send(packet));
-            addLog('group-chat-log', `<div class="p-2 border-2 border-[#2E3138] rounded bg-accent text-base w-fit max-w-[80%] self-end">${msg}</div>`);
+            
+            // Render locally
+            addLog('group-chat-log', `
+                <div class="flex flex-col w-fit max-w-[85%] self-end items-end">
+                    <span class="text-[10px] font-bold opacity-60 mb-0.5 px-1">${myUsername}</span>
+                    <div class="p-2 border-2 border-[#2E3138] rounded-md bg-accent text-[#F1E9DB]">
+                        ${msg}
+                    </div>
+                </div>
+            `);
             input.value = '';
         }
 
@@ -492,9 +622,12 @@
             const file = event.target.files[0];
             if (!file) return;
             connections.forEach(c => sendFileRaw(c, file));
+            
+            // Render locally
             addLog('group-file-log', `
-                <div class="p-2 border-2 border-[#2E3138] flex flex-col gap-1 bg-[#2E3138]/5">
-                    <span class="font-bold text-xs truncate">Sent: ${file.name}</span>
+                <div class="p-2 border-2 border-[#2E3138] flex flex-col gap-1 bg-white rounded-md">
+                    <span class="font-bold text-xs truncate">${file.name}</span>
+                    <span class="text-[10px] font-bold opacity-70">Shared by you</span>
                 </div>
             `);
         }
