@@ -89,7 +89,7 @@
 
         .input-box {
             border: 2px solid #2E3138;
-            background-color: transparent;
+            background-color: #F1E9DB;
             color: #2E3138;
             outline: none;
         }
@@ -598,7 +598,7 @@
         function showQRModal() {
             if (currentCode) {
                 generateQR('modal-qr-container', currentCode);
-                document.getElementById('qr-modal').classList.remove('hidden');
+                document.getElementById('qr-modal').classList.add('hidden');
             }
         }
 
