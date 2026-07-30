@@ -2,7 +2,10 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-        <!-- Favicon -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ZipDrop</title>
+
+    <!-- Favicon -->
     <link rel="icon" type="image/png" href="favicon.png">
 
     <!-- Android Web App / PWA Manifest & Icons -->
@@ -13,16 +16,11 @@
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="default">
     <meta name="apple-mobile-web-app-title" content="ZipDrop">
-    
-    <!-- Specific Apple Touch Icon Declarations -->
     <link rel="apple-touch-icon" href="apple.png">
     <link rel="apple-touch-icon" sizes="152x152" href="apple.png">
     <link rel="apple-touch-icon" sizes="180x180" href="apple.png">
     <link rel="apple-touch-icon" sizes="167x167" href="apple.png">
 
-
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ZipDrop</title>
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- PeerJS for serverless WebRTC -->
@@ -88,6 +86,47 @@
         }
         .input-box:focus {
             border-color: #588B8B;
+        }
+
+        /* Toggle Switch Styles */
+        .switch {
+            position: relative;
+            display: inline-block;
+            width: 44px;
+            height: 24px;
+        }
+        .switch input { 
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+        .slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background-color: transparent;
+            border: 2px solid #2E3138;
+            transition: .2s;
+            border-radius: 24px;
+        }
+        .slider:before {
+            position: absolute;
+            content: "";
+            height: 14px;
+            width: 14px;
+            left: 3px;
+            bottom: 3px;
+            background-color: #2E3138;
+            transition: .2s;
+            border-radius: 50%;
+        }
+        input:checked + .slider {
+            background-color: #588B8B;
+            border-color: #2E3138;
+        }
+        input:checked + .slider:before {
+            transform: translateX(20px);
+            background-color: #F1E9DB;
         }
 
         /* Hide scrollbar for clean look */
@@ -162,14 +201,23 @@
             </div>
 
             <!-- Code Display Area (Waiting) -->
-            <div id="setup-waiting-area" class="hidden panel p-10 flex flex-col items-center justify-center text-center">
-                <p class="text-sm font-bold opacity-70 uppercase tracking-widest mb-2">Your Code</p>
-                <p id="display-code" class="text-7xl font-mono font-bold tracking-widest text-accent mb-6">---</p>
+            <div id="setup-waiting-area" class="hidden panel p-8 flex flex-col items-center justify-center text-center">
+                <p class="text-sm font-bold opacity-70 uppercase tracking-widest mb-1">Your Code</p>
+                <p id="display-code" class="text-6xl font-mono font-bold tracking-widest text-accent mb-4">---</p>
                 
                 <!-- QR Code displays here for non-groups -->
-                <div id="setup-qr-container" class="mb-6 p-4 bg-white border-2 border-text hidden"></div>
+                <div id="setup-qr-container" class="mb-4 p-3 bg-white border-2 border-text hidden"></div>
 
-                <p id="waiting-msg" class="text-sm font-semibold">Waiting for device to connect...</p>
+                <p id="waiting-msg" class="text-sm font-semibold mb-6">Waiting for device to connect...</p>
+
+                <!-- Keep Screen Awake Toggle Switch (Appears during transfers/waiting) -->
+                <div class="w-full pt-4 border-t-2 border-text/20 flex items-center justify-between px-2">
+                    <span class="text-xs font-bold uppercase tracking-wider opacity-80">Keep Screen Awake</span>
+                    <label class="switch">
+                        <input type="checkbox" id="wakelock-toggle" onchange="toggleWakeLock(this)">
+                        <span class="slider"></span>
+                    </label>
+                </div>
             </div>
         </div>
 
@@ -205,7 +253,7 @@
         </div>
 
         <!-- VIEW: DEVICE LINK -->
-        <div id="view-device-link" class="hidden flex flex-col h-[60vh] w-full">
+        <div id="view-device-link" class="hidden flex flex-col h-[65vh] w-full">
             <div class="flex justify-between items-center mb-4">
                 <h2 class="text-2xl font-bold">Device Link Active</h2>
                 <button onclick="resetApp()" class="text-sm font-bold opacity-60 hover:opacity-100 transition">Disconnect</button>
@@ -215,7 +263,16 @@
                 <span class="text-2xl font-bold mb-2">Drop Files Here</span>
                 <span class="text-sm font-semibold opacity-70">Transfers instantly to linked device</span>
             </label>
-            <div id="device-link-log" class="mt-4 flex flex-col gap-2 h-32 overflow-y-auto font-mono text-sm"></div>
+            <div id="device-link-log" class="mt-4 flex flex-col gap-2 h-28 overflow-y-auto font-mono text-sm"></div>
+
+            <!-- Keep Screen Awake Toggle Switch for Device Link -->
+            <div class="panel mt-4 p-3 flex items-center justify-between">
+                <span class="text-xs font-bold uppercase tracking-wider opacity-80">Keep Screen Awake</span>
+                <label class="switch">
+                    <input type="checkbox" id="wakelock-toggle-device" onchange="toggleWakeLock(this)">
+                    <span class="slider"></span>
+                </label>
+            </div>
         </div>
 
     </main>
@@ -244,14 +301,52 @@
         // --- Core State ---
         const PREFIX = 'zpdrp-v3-';
         let peer = null;
-        let connections = []; // Array for Groups, single connection for others
-        let currentMode = null; // 'group', 'quick', 'device', 'mega'
+        let connections = []; 
+        let currentMode = null; 
         let currentCode = null;
         let isHost = false;
         let pendingFiles = [];
         
         let myUsername = 'Anonymous';
         let nameCallback = null;
+
+        // Wake Lock Reference
+        let wakeLockSentinel = null;
+
+        async function toggleWakeLock(checkbox) {
+            if (checkbox.checked) {
+                try {
+                    if ('wakeLock' in navigator) {
+                        wakeLockSentinel = await navigator.wakeLock.request('screen');
+                        wakeLockSentinel.addEventListener('release', () => {
+                            wakeLockSentinel = null;
+                            // Sync checkbox if system released it
+                            document.getElementById('wakelock-toggle').checked = false;
+                            document.getElementById('wakelock-toggle-device').checked = false;
+                        });
+                    } else {
+                        alert('Screen Wake Lock is not supported by your browser.');
+                        checkbox.checked = false;
+                    }
+                } catch (err) {
+                    checkbox.checked = false;
+                }
+            } else {
+                if (wakeLockSentinel) {
+                    await wakeLockSentinel.release();
+                    wakeLockSentinel = null;
+                }
+            }
+        }
+
+        // Re-acquire wake lock if page becomes visible again during active transfer
+        document.addEventListener('visibilitychange', async () => {
+            if (wakeLockSentinel !== null && document.visibilityState === 'visible') {
+                try {
+                    wakeLockSentinel = await navigator.wakeLock.request('screen');
+                } catch (err) {}
+            }
+        });
 
         // Auto-join via URL if code is present
         window.onload = () => {
@@ -273,7 +368,15 @@
             document.getElementById('global-status').innerText = msg;
         }
 
-        function resetApp() {
+        async function resetApp() {
+            // Release Wake Lock on session reset
+            if (wakeLockSentinel) {
+                await wakeLockSentinel.release();
+                wakeLockSentinel = null;
+            }
+            document.getElementById('wakelock-toggle').checked = false;
+            document.getElementById('wakelock-toggle-device').checked = false;
+
             if (peer) peer.destroy();
             connections = [];
             currentMode = null;
@@ -288,7 +391,6 @@
             document.getElementById('name-modal').classList.add('hidden');
             document.getElementById('qr-modal').classList.add('hidden');
             setStatus('Ready');
-            // Remove URL parameter purely visually
             window.history.replaceState({}, document.title, window.location.pathname);
             showView('view-home');
         }
@@ -351,12 +453,12 @@
         // --- QR Code Generators ---
         function generateQR(containerId, codeText) {
             const container = document.getElementById(containerId);
-            container.innerHTML = ''; // Clear previous
+            container.innerHTML = '';
             const url = window.location.origin + window.location.pathname + '?code=' + codeText;
             new QRCode(container, {
                 text: url,
-                width: 140,
-                height: 140,
+                width: 130,
+                height: 130,
                 colorDark: "#2E3138",
                 colorLight: "#ffffff",
                 correctLevel: QRCode.CorrectLevel.M
@@ -426,12 +528,10 @@
                 setStatus('Hosting');
                 
                 if (currentMode === 'group') {
-                    // Instantly open group view for host, skip waiting screen
                     document.getElementById('group-code-header').innerText = currentCode;
                     showView('view-group');
                     addLog('group-chat-log', `<div class="text-xs font-bold opacity-50 text-center my-2">Group created by ${myUsername}</div>`);
                 } else {
-                    // Show QR Code on setup waiting screen for other modes
                     document.getElementById('setup-qr-container').classList.remove('hidden');
                     generateQR('setup-qr-container', currentCode);
                 }
@@ -450,7 +550,6 @@
 
         function setupHostConnectionLogic(conn) {
             conn.on('open', () => {
-                // Handshake sends mode
                 conn.send({ type: 'handshake', mode: currentMode });
 
                 if (currentMode === 'quick') {
@@ -520,7 +619,6 @@
 
         // --- Core Data Handling (Router) ---
         function handleIncomingData(sourceConn, data) {
-            // Handshake routing
             if (data.type === 'handshake') {
                 currentMode = data.mode;
                 if (currentMode === 'quick' || currentMode === 'mega') {
@@ -535,14 +633,12 @@
                     promptName(() => {
                         document.getElementById('group-code-header').innerText = currentCode;
                         showView('view-group');
-                        // Announce join to group
                         sourceConn.send({ type: 'system', msg: `${myUsername} joined the group` });
                     });
                 }
                 return;
             }
 
-            // System Message (Join/Leave)
             if (data.type === 'system') {
                 if (isHost && currentMode === 'group') {
                     connections.forEach(c => { if(c !== sourceConn) c.send(data); });
@@ -550,7 +646,6 @@
                 addLog('group-chat-log', `<div class="text-[11px] font-bold opacity-60 text-center my-2">${data.msg}</div>`);
             }
 
-            // Chat Message 
             if (data.type === 'chat') {
                 if (isHost && currentMode === 'group') {
                     connections.forEach(c => { if(c !== sourceConn) c.send(data); });
@@ -567,7 +662,6 @@
                 `);
             }
 
-            // Raw File 
             if (data.type === 'file') {
                 const blob = new Blob([data.buffer], { type: data.mime });
                 
@@ -625,7 +719,6 @@
             const packet = { type: 'chat', msg: msg, sender: myUsername };
             connections.forEach(c => c.send(packet));
             
-            // Render locally
             addLog('group-chat-log', `
                 <div class="flex flex-col w-fit max-w-[85%] self-end items-end">
                     <span class="text-[10px] font-bold opacity-60 mb-0.5 px-1">${myUsername}</span>
@@ -642,7 +735,6 @@
             if (!file) return;
             connections.forEach(c => sendFileRaw(c, file));
             
-            // Render locally
             addLog('group-file-log', `
                 <div class="p-2 border-2 border-[#2E3138] flex flex-col gap-1 bg-white rounded-md">
                     <span class="font-bold text-xs truncate">${file.name}</span>
@@ -694,5 +786,4 @@
     </script>
 </body>
 </html>
-
 
