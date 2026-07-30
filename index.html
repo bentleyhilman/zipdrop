@@ -210,7 +210,12 @@
 
                 <p id="waiting-msg" class="text-sm font-semibold mb-6">Waiting for device to connect...</p>
 
-                <!-- Keep Screen Awake Toggle Switch (Appears during transfers/waiting) -->
+                <!-- Manual Close Button (Appears when transfers complete) -->
+                <button id="host-finish-btn" onclick="resetApp()" class="btn-accent py-3 px-8 font-bold text-lg mb-6 hidden">
+                    Done / Close Session
+                </button>
+
+                <!-- Keep Screen Awake Toggle Switch -->
                 <div class="w-full pt-4 border-t-2 border-text/20 flex items-center justify-between px-2">
                     <span class="text-xs font-bold uppercase tracking-wider opacity-80">Keep Screen Awake</span>
                     <label class="switch">
@@ -313,7 +318,6 @@
         // Wake Lock Reference
         let wakeLockSentinel = null;
 
-        // Detect iPhone / iOS
         function isiPhone() {
             return /iPhone|iPad|iPod/i.test(navigator.userAgent) || 
                    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
@@ -409,6 +413,7 @@
             document.getElementById('group-chat-log').innerHTML = '';
             document.getElementById('group-file-log').innerHTML = '';
             document.getElementById('device-link-log').innerHTML = '';
+            document.getElementById('host-finish-btn').classList.add('hidden');
             document.getElementById('name-modal').classList.add('hidden');
             document.getElementById('qr-modal').classList.add('hidden');
             setStatus('Ready');
@@ -496,6 +501,7 @@
             pendingFiles = [];
             document.getElementById('setup-start-btn').classList.add('hidden');
             document.getElementById('setup-selected-files').innerHTML = '';
+            document.getElementById('host-finish-btn').classList.add('hidden');
             
             if (mode === 'group') {
                 promptName(() => {
@@ -571,14 +577,14 @@
 
                 if (currentMode === 'quick') {
                     sendFileRaw(conn, pendingFiles[0]);
-                    document.getElementById('waiting-msg').innerText = "File Sent!";
-                    setTimeout(resetApp, 2000); 
+                    document.getElementById('waiting-msg').innerText = "File transmitted to connected device!";
+                    document.getElementById('host-finish-btn').classList.remove('hidden');
                 } 
                 else if (currentMode === 'mega') {
                     document.getElementById('waiting-msg').innerText = `Sending ${pendingFiles.length} files...`;
                     pendingFiles.forEach(f => sendFileRaw(conn, f));
-                    document.getElementById('waiting-msg').innerText = "All Files Sent!";
-                    setTimeout(resetApp, 3000);
+                    document.getElementById('waiting-msg').innerText = "All files transmitted to connected device!";
+                    document.getElementById('host-finish-btn').classList.remove('hidden');
                 }
                 else if (currentMode === 'device') {
                     showView('view-device-link');
@@ -622,8 +628,10 @@
                 });
 
                 conn.on('close', () => {
-                    triggerPopup('Session closed by host.');
-                    resetApp();
+                    if (currentMode !== 'quick' && currentMode !== 'mega') {
+                        triggerPopup('Session closed by host.');
+                        resetApp();
+                    }
                 });
             });
 
@@ -690,7 +698,7 @@
                         downloadBlob(blob, data.name);
                     }
                     document.getElementById('join-code-input').value = 'Done!';
-                    setTimeout(() => { if(!isHost) resetApp(); }, 2000);
+                    setStatus('Transfer Complete');
                 }
                 else if (currentMode === 'device') {
                     addLog('device-link-log', `Received: ${data.name}`);
@@ -722,7 +730,6 @@
                         </div>
                     `);
 
-                    // Inject iPhone Save to Photos button if applicable
                     if (isImage && isiPhone()) {
                         const lastFileLog = document.getElementById('group-file-log').lastElementChild;
                         const actionContainer = lastFileLog.querySelector('div > div:last-child');
@@ -826,4 +833,3 @@
     </script>
 </body>
 </html>
-
