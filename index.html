@@ -37,44 +37,50 @@
     <!-- JSZip for client-side file compression -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 
-    <!-- Firebase SDKs -->
+    <!-- Firebase SDK Modules -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, doc, setDoc, getDoc, deleteDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
         import { getStorage, ref, uploadBytesResumable, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
 
-        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
-            apiKey: "",
-            authDomain: "zipdrop-app.firebaseapp.com",
-            projectId: "zipdrop-app",
-            storageBucket: "zipdrop-app.appspot.com",
-            messagingSenderId: "123456789",
-            appId: "1:123456789:web:abcdef123456"
+        // Global Firebase Holder
+        window.fb = {
+            initialized: false,
+            doc, setDoc, getDoc, deleteDoc, ref, uploadBytesResumable, getDownloadURL, deleteObject
         };
 
-        const app = initializeApp(firebaseConfig);
-        const auth = getAuth(app);
-        const db = getFirestore(app);
-        const storage = getStorage(app);
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        // Get saved config from localStorage if available, or environment
+        const savedConfig = localStorage.getItem('zipdrop_firebase_config');
+        let firebaseConfig = null;
 
-        async function initAuth() {
+        if (savedConfig) {
+            try { firebaseConfig = JSON.parse(savedConfig); } catch(e){}
+        } else if (typeof __firebase_config !== 'undefined' && __firebase_config) {
+            try { firebaseConfig = JSON.parse(__firebase_config); } catch(e){}
+        }
+
+        if (firebaseConfig && firebaseConfig.apiKey) {
             try {
+                const app = initializeApp(firebaseConfig);
+                const auth = getAuth(app);
+                const db = getFirestore(app);
+                const storage = getStorage(app);
+                const appId = typeof __app_id !== 'undefined' ? __app_id : 'zipdrop-app';
+
                 if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
                     await signInWithCustomToken(auth, __initial_auth_token);
                 } else {
                     await signInAnonymously(auth);
                 }
+
+                Object.assign(window.fb, {
+                    app, auth, db, storage, appId, initialized: true
+                });
             } catch (err) {
-                console.error("Firebase auth error:", err);
+                console.error("Firebase init failed:", err);
             }
         }
-        initAuth();
-
-        window.fb = {
-            db, storage, auth, appId, doc, setDoc, getDoc, deleteDoc, ref, uploadBytesResumable, getDownloadURL, deleteObject
-        };
     </script>
 
     <script>
@@ -393,6 +399,19 @@
         </div>
     </div>
 
+    <!-- MODAL: Firebase Setup (For GitHub Pages Deployment) -->
+    <div id="firebase-modal" class="hidden fixed inset-0 bg-[#F1E9DB]/95 flex items-center justify-center z-50 backdrop-blur-sm">
+        <div class="panel p-6 flex flex-col items-center max-w-md w-full mx-4">
+            <h3 class="text-xl font-bold mb-2">Cloud Vault Setup</h3>
+            <p class="text-sm opacity-80 mb-4 text-center">To use Cloud Vault on your custom website, paste your free Firebase Config JSON below:</p>
+            <textarea id="firebase-config-input" class="input-box p-3 mb-4 w-full h-32 text-xs font-mono" placeholder='{"apiKey": "AIzaSy...", "authDomain": "...", "projectId": "...", "storageBucket": "..."}'></textarea>
+            <div class="flex gap-2 w-full">
+                <button onclick="saveFirebaseConfig()" class="btn-accent px-4 py-2.5 font-bold flex-1">Save Config</button>
+                <button onclick="document.getElementById('firebase-modal').classList.add('hidden')" class="btn-outline px-4 py-2.5 font-bold">Cancel</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         // --- Core State ---
         const PREFIX = 'zpdrp-v3-';
@@ -421,6 +440,22 @@
         let nameCallback = null;
 
         let wakeLockSentinel = null;
+
+        function checkFirebaseReady() {
+            return window.fb && window.fb.initialized;
+        }
+
+        function saveFirebaseConfig() {
+            const raw = document.getElementById('firebase-config-input').value.trim();
+            if (!raw) return;
+            try {
+                const parsed = JSON.parse(raw);
+                localStorage.setItem('zipdrop_firebase_config', JSON.stringify(parsed));
+                location.reload();
+            } catch (e) {
+                alert("Invalid JSON format. Please paste your valid Firebase configuration object.");
+            }
+        }
 
         function isiPhone() {
             return /iPhone|iPad|iPod/i.test(navigator.userAgent) || 
@@ -471,10 +506,7 @@
                           (hours * 60 * 60 * 1000) + 
                           (minutes * 60 * 1000);
 
-            // Default to 1 hour if set to 0
             if (totalMs <= 0) totalMs = 3600000;
-            
-            // Hard Cap at 10 days
             const maxMs = 10 * 24 * 60 * 60 * 1000;
             return Math.min(totalMs, maxMs);
         }
@@ -559,6 +591,7 @@
             document.getElementById('cloud-timer-selector').classList.add('hidden');
             document.getElementById('name-modal').classList.add('hidden');
             document.getElementById('qr-modal').classList.add('hidden');
+            document.getElementById('firebase-modal').classList.add('hidden');
             setStatus('Ready');
             window.history.replaceState({}, document.title, window.location.pathname);
             showView('view-home');
@@ -639,6 +672,11 @@
         }
 
         function initSetup(mode) {
+            if (mode === 'cloud' && !checkFirebaseReady()) {
+                document.getElementById('firebase-modal').classList.remove('hidden');
+                return;
+            }
+
             currentMode = mode;
             isHost = true;
             pendingFiles = [];
@@ -686,6 +724,11 @@
 
         async function startHostSession() {
             if (currentMode === 'cloud') {
+                if (!checkFirebaseReady()) {
+                    document.getElementById('firebase-modal').classList.remove('hidden');
+                    return;
+                }
+
                 document.getElementById('setup-file-area').classList.add('hidden');
                 document.getElementById('setup-waiting-area').classList.remove('hidden');
                 document.getElementById('display-code').innerText = '...';
@@ -833,51 +876,56 @@
             document.getElementById('join-code-input').value = '...';
             isHost = false;
 
-            try {
-                const cloudDocRef = window.fb.doc(window.fb.db, 'artifacts', window.fb.appId, 'public', 'data', 'cloud_codes', code);
-                window.fb.getDoc(cloudDocRef).then(async (cloudDoc) => {
-                    if (cloudDoc.exists()) {
-                        const data = cloudDoc.data();
-                        
-                        if (Date.now() > data.expiresAt) {
-                            try {
-                                await window.fb.deleteDoc(cloudDocRef);
-                                await window.fb.deleteObject(window.fb.ref(window.fb.storage, data.storagePath));
-                            } catch (e) {}
-                            triggerPopup('This code has expired and self-destructed.');
-                            resetApp();
+            if (checkFirebaseReady()) {
+                try {
+                    const cloudDocRef = window.fb.doc(window.fb.db, 'artifacts', window.fb.appId, 'public', 'data', 'cloud_codes', code);
+                    window.fb.getDoc(cloudDocRef).then(async (cloudDoc) => {
+                        if (cloudDoc.exists()) {
+                            const data = cloudDoc.data();
+                            
+                            if (Date.now() > data.expiresAt) {
+                                try {
+                                    await window.fb.deleteDoc(cloudDocRef);
+                                    await window.fb.deleteObject(window.fb.ref(window.fb.storage, data.storagePath));
+                                } catch (e) {}
+                                triggerPopup('This code has expired and self-destructed.');
+                                resetApp();
+                                return;
+                            }
+
+                            showView('view-receiver');
+                            document.getElementById('receiver-title').innerText = "Downloading Cloud File...";
+                            document.getElementById('receiver-status-msg').innerText = `Fetching ${data.name} (${formatBytes(data.size)})...`;
+
+                            const response = await fetch(data.url);
+                            const blob = await response.blob();
+                            
+                            let savedToPhotos = false;
+                            const isImage = data.mime && data.mime.startsWith('image/');
+                            if (isImage && isiPhone()) {
+                                savedToPhotos = await handleImageSave(blob, data.name);
+                            }
+                            if (!savedToPhotos) {
+                                downloadBlob(blob, data.name);
+                            }
+
+                            setStatus('Transfer Complete');
+                            document.getElementById('receiver-title').innerText = "Transfer Complete";
+                            document.getElementById('receiver-status-msg').innerText = `${data.name} downloaded successfully!`;
                             return;
                         }
 
-                        showView('view-receiver');
-                        document.getElementById('receiver-title').innerText = "Downloading Cloud File...";
-                        document.getElementById('receiver-status-msg').innerText = `Fetching ${data.name} (${formatBytes(data.size)})...`;
-
-                        const response = await fetch(data.url);
-                        const blob = await response.blob();
-                        
-                        let savedToPhotos = false;
-                        const isImage = data.mime && data.mime.startsWith('image/');
-                        if (isImage && isiPhone()) {
-                            savedToPhotos = await handleImageSave(blob, data.name);
-                        }
-                        if (!savedToPhotos) {
-                            downloadBlob(blob, data.name);
-                        }
-
-                        setStatus('Transfer Complete');
-                        document.getElementById('receiver-title').innerText = "Transfer Complete";
-                        document.getElementById('receiver-status-msg').innerText = `${data.name} downloaded successfully!`;
-                        return;
-                    }
-
-                    startWebRTCJoin(code);
-                }).catch(() => {
-                    startWebRTCJoin(code);
-                });
-            } catch (err) {
-                startWebRTCJoin(code);
+                        startWebRTCJoin(code);
+                    }).catch(() => {
+                        startWebRTCJoin(code);
+                    });
+                    return;
+                } catch (err) {
+                    console.log("Cloud lookup fallback to WebRTC:", err);
+                }
             }
+
+            startWebRTCJoin(code);
         }
 
         function startWebRTCJoin(code) {
