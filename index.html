@@ -1,0 +1,546 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ZipDrop</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- PeerJS for serverless WebRTC -->
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        base: '#F1E9DB',
+                        text: '#2E3138',
+                        accent: '#588B8B',
+                    },
+                    fontFamily: {
+                        sans: ['system-ui', '-apple-system', 'sans-serif'],
+                        mono: ['ui-monospace', 'monospace']
+                    }
+                }
+            }
+        }
+    </script>
+
+    <style>
+        body {
+            background-color: #F1E9DB;
+            color: #2E3138;
+            -webkit-font-smoothing: antialiased;
+        }
+        
+        .panel {
+            border: 2px solid #2E3138;
+            background-color: transparent;
+        }
+
+        .btn-accent {
+            background-color: #588B8B;
+            color: #F1E9DB;
+            border: 2px solid #2E3138;
+            transition: opacity 0.2s;
+        }
+        .btn-accent:hover {
+            opacity: 0.9;
+        }
+
+        .btn-outline {
+            background-color: transparent;
+            color: #2E3138;
+            border: 2px solid #2E3138;
+            transition: background-color 0.2s;
+        }
+        .btn-outline:hover {
+            background-color: rgba(46, 49, 56, 0.05);
+        }
+
+        .input-box {
+            border: 2px solid #2E3138;
+            background-color: transparent;
+            color: #2E3138;
+            outline: none;
+        }
+        .input-box:focus {
+            border-color: #588B8B;
+        }
+
+        /* Hide scrollbar for clean look */
+        ::-webkit-scrollbar { width: 0px; }
+
+        .drag-active {
+            background-color: rgba(88, 139, 139, 0.1) !important;
+            border-color: #588B8B !important;
+            border-style: dashed !important;
+        }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col items-center justify-start pt-12 px-4 pb-12">
+
+    <!-- Header -->
+    <header class="w-full max-w-2xl flex justify-between items-end mb-12">
+        <h1 class="text-4xl font-bold tracking-tight cursor-pointer" onclick="resetApp()">ZipDrop</h1>
+        <span id="global-status" class="text-sm font-semibold opacity-70">Ready</span>
+    </header>
+
+    <main id="app-container" class="w-full max-w-2xl w-full">
+
+        <!-- VIEW: HOME -->
+        <div id="view-home" class="flex flex-col gap-8 w-full">
+            <!-- Join Code Input -->
+            <div class="flex gap-3 h-14">
+                <input type="text" id="join-code-input" placeholder="Enter 3-character code" maxlength="3" class="input-box w-full h-full px-4 text-lg font-mono uppercase tracking-widest text-center font-bold">
+                <button onclick="joinCode()" class="btn-accent h-full px-8 font-bold text-lg">Join</button>
+            </div>
+
+            <!-- Creation Grid -->
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                
+                <button onclick="initSetup('group')" class="panel p-6 text-left hover:bg-[#2E3138]/5 transition group">
+                    <h2 class="text-xl font-bold mb-2">Groups</h2>
+                    <p class="text-sm opacity-80">Create a shared room for chat and multi-user file drops.</p>
+                </button>
+
+                <button onclick="initSetup('quick')" class="panel p-6 text-left hover:bg-[#2E3138]/5 transition">
+                    <h2 class="text-xl font-bold mb-2">Quick Share</h2>
+                    <p class="text-sm opacity-80">Upload one file. Instantly downloads when code is entered.</p>
+                </button>
+
+                <button onclick="initSetup('device')" class="panel p-6 text-left hover:bg-[#2E3138]/5 transition">
+                    <h2 class="text-xl font-bold mb-2">Device Link</h2>
+                    <p class="text-sm opacity-80">Persistent 1-to-1 link for instant back-and-forth drops.</p>
+                </button>
+
+                <button onclick="initSetup('mega')" class="panel p-6 text-left hover:bg-[#2E3138]/5 transition">
+                    <h2 class="text-xl font-bold mb-2">Mega Transfer</h2>
+                    <p class="text-sm opacity-80">Select many files. Automatically sends all at once.</p>
+                </button>
+
+            </div>
+        </div>
+
+        <!-- VIEW: HOST SETUP (File Selection & Waiting for Quick/Mega/Device) -->
+        <div id="view-setup" class="hidden flex flex-col gap-6 w-full">
+            <div class="flex justify-between items-center mb-2">
+                <h2 id="setup-title" class="text-2xl font-bold">Setup</h2>
+                <button onclick="resetApp()" class="text-sm font-bold opacity-60 hover:opacity-100">Cancel</button>
+            </div>
+
+            <!-- File Input Area (For Quick/Mega) -->
+            <div id="setup-file-area" class="hidden flex flex-col gap-4">
+                <label for="host-file-input" class="panel p-10 flex flex-col items-center justify-center cursor-pointer hover:bg-[#2E3138]/5 transition border-dashed">
+                    <span class="font-bold text-lg mb-1" id="setup-file-label">Select File</span>
+                    <input type="file" id="host-file-input" class="hidden" onchange="handleSetupFiles(event)">
+                </label>
+                <div id="setup-selected-files" class="text-sm font-mono opacity-80"></div>
+                <button id="setup-start-btn" onclick="startHostSession()" class="btn-accent py-3 font-bold hidden">Generate Code</button>
+            </div>
+
+            <!-- Code Display Area (Waiting) -->
+            <div id="setup-waiting-area" class="hidden panel p-12 flex flex-col items-center justify-center text-center">
+                <p class="text-sm font-bold opacity-70 uppercase tracking-widest mb-2">Your Code</p>
+                <p id="display-code" class="text-7xl font-mono font-bold tracking-widest text-accent mb-6">---</p>
+                <p id="waiting-msg" class="text-sm font-semibold">Waiting for device to connect...</p>
+            </div>
+        </div>
+
+        <!-- VIEW: ACTIVE GROUP -->
+        <div id="view-group" class="hidden flex flex-col h-[70vh] panel w-full overflow-hidden">
+            <div class="p-4 border-b-2 border-text flex justify-between items-center bg-[#2E3138]/5">
+                <span class="font-bold">Group: <span id="group-code-header" class="font-mono text-accent uppercase"></span></span>
+                <button onclick="resetApp()" class="text-sm font-bold opacity-70 hover:opacity-100">Leave</button>
+            </div>
+            
+            <div class="flex-grow flex flex-col sm:flex-row overflow-hidden">
+                <!-- Chat Area -->
+                <div class="flex-grow flex flex-col border-b-2 sm:border-b-0 sm:border-r-2 border-text h-1/2 sm:h-full">
+                    <div id="group-chat-log" class="flex-grow p-4 overflow-y-auto flex flex-col gap-2"></div>
+                    <div class="flex border-t-2 border-text">
+                        <input type="text" id="group-chat-input" placeholder="Message..." class="input-box border-none w-full p-3 font-medium">
+                        <button onclick="sendGroupChat()" class="btn-accent border-none border-l-2 px-6 font-bold">Send</button>
+                    </div>
+                </div>
+
+                <!-- Files Area -->
+                <div class="w-full sm:w-64 flex flex-col h-1/2 sm:h-full">
+                    <div class="p-3 border-b-2 border-text font-bold text-sm bg-[#2E3138]/5">Shared Files</div>
+                    <div id="group-file-log" class="flex-grow p-3 overflow-y-auto flex flex-col gap-2"></div>
+                    <label class="btn-outline border-none border-t-2 p-3 text-center cursor-pointer font-bold block">
+                        Upload File
+                        <input type="file" class="hidden" onchange="sendGroupFile(event)">
+                    </label>
+                </div>
+            </div>
+        </div>
+
+        <!-- VIEW: DEVICE LINK -->
+        <div id="view-device-link" class="hidden flex flex-col h-[60vh] w-full">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-2xl font-bold">Device Link Active</h2>
+                <button onclick="resetApp()" class="text-sm font-bold opacity-60 hover:opacity-100">Disconnect</button>
+            </div>
+            <label id="device-dropzone" class="panel flex-grow flex flex-col items-center justify-center cursor-pointer hover:bg-[#2E3138]/5 transition relative">
+                <input type="file" class="hidden" multiple onchange="sendDeviceLinkFile(event)">
+                <span class="text-2xl font-bold mb-2">Drop Files Here</span>
+                <span class="text-sm font-semibold opacity-70">Transfers instantly to linked device</span>
+            </label>
+            <div id="device-link-log" class="mt-4 flex flex-col gap-2 h-32 overflow-y-auto font-mono text-sm"></div>
+        </div>
+
+    </main>
+
+    <script>
+        // --- Core State ---
+        const PREFIX = 'zpdrp-v2-';
+        let peer = null;
+        let connections = []; // Array for Groups, single connection for others
+        let currentMode = null; // 'group', 'quick', 'device', 'mega'
+        let isHost = false;
+        let pendingFiles = []; // Files selected during setup
+
+        // --- View Management ---
+        function showView(viewId) {
+            document.querySelectorAll('main > div').forEach(el => el.classList.add('hidden'));
+            document.getElementById(viewId).classList.remove('hidden');
+        }
+
+        function setStatus(msg) {
+            document.getElementById('global-status').innerText = msg;
+        }
+
+        function resetApp() {
+            if (peer) peer.destroy();
+            connections = [];
+            currentMode = null;
+            isHost = false;
+            pendingFiles = [];
+            document.getElementById('join-code-input').value = '';
+            document.getElementById('setup-selected-files').innerHTML = '';
+            document.getElementById('group-chat-log').innerHTML = '';
+            document.getElementById('group-file-log').innerHTML = '';
+            document.getElementById('device-link-log').innerHTML = '';
+            setStatus('Ready');
+            showView('view-home');
+        }
+
+        // --- Helpers ---
+        function generateRandomCode() {
+            return Math.random().toString(36).substring(2, 5).toLowerCase();
+        }
+
+        function formatBytes(bytes) {
+            if (bytes === 0) return '0 B';
+            const k = 1024, sizes = ['B', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+        }
+
+        function downloadBlob(blob, filename) {
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
+        function triggerPopup(msg) {
+            alert(msg); // Minimal native popup as requested for simplicity
+        }
+
+        function addLog(containerId, html) {
+            const container = document.getElementById(containerId);
+            const el = document.createElement('div');
+            el.innerHTML = html;
+            container.appendChild(el);
+            container.scrollTop = container.scrollHeight;
+        }
+
+        // --- Process: Host Setup ---
+        function initSetup(mode) {
+            currentMode = mode;
+            isHost = true;
+            pendingFiles = [];
+            document.getElementById('setup-start-btn').classList.add('hidden');
+            document.getElementById('setup-selected-files').innerHTML = '';
+            
+            showView('view-setup');
+
+            if (mode === 'group' || mode === 'device') {
+                document.getElementById('setup-file-area').classList.add('hidden');
+                document.getElementById('setup-title').innerText = mode === 'group' ? 'Start Group' : 'Start Device Link';
+                startHostSession(); // Skip file selection, jump straight to code gen
+            } else {
+                document.getElementById('setup-title').innerText = mode === 'quick' ? 'Quick Share' : 'Mega Transfer';
+                document.getElementById('setup-file-area').classList.remove('hidden');
+                document.getElementById('setup-waiting-area').classList.add('hidden');
+                
+                const fileInput = document.getElementById('host-file-input');
+                fileInput.multiple = (mode === 'mega');
+                document.getElementById('setup-file-label').innerText = mode === 'mega' ? 'Select Multiple Files' : 'Select One File';
+            }
+        }
+
+        function handleSetupFiles(event) {
+            pendingFiles = Array.from(event.target.files);
+            if (pendingFiles.length > 0) {
+                document.getElementById('setup-start-btn').classList.remove('hidden');
+                const names = pendingFiles.map(f => f.name).join('<br>');
+                document.getElementById('setup-selected-files').innerHTML = `${pendingFiles.length} file(s) selected:<br>${names}`;
+            }
+        }
+
+        function startHostSession() {
+            document.getElementById('setup-file-area').classList.add('hidden');
+            document.getElementById('setup-waiting-area').classList.remove('hidden');
+            document.getElementById('display-code').innerText = '...';
+            setStatus('Generating Code...');
+
+            const code = generateRandomCode();
+            
+            peer = new Peer(PREFIX + code);
+
+            peer.on('open', (id) => {
+                document.getElementById('display-code').innerText = code;
+                setStatus('Hosting');
+                
+                if (currentMode === 'group') {
+                    // Instantly open group view for host, others will join
+                    document.getElementById('group-code-header').innerText = code;
+                    showView('view-group');
+                }
+            });
+
+            peer.on('connection', (conn) => {
+                connections.push(conn);
+                setupHostConnectionLogic(conn);
+            });
+
+            peer.on('error', (err) => {
+                triggerPopup('Error creating code, please try again.');
+                resetApp();
+            });
+        }
+
+        function setupHostConnectionLogic(conn) {
+            conn.on('open', () => {
+                // Tell the guest what type of session this is
+                conn.send({ type: 'handshake', mode: currentMode });
+
+                if (currentMode === 'quick') {
+                    // Send file immediately
+                    sendFileRaw(conn, pendingFiles[0]);
+                    document.getElementById('waiting-msg').innerText = "File Sent!";
+                    setTimeout(resetApp, 2000); // Host finishes
+                } 
+                else if (currentMode === 'mega') {
+                    // Send all files sequentially
+                    document.getElementById('waiting-msg').innerText = `Sending ${pendingFiles.length} files...`;
+                    pendingFiles.forEach(f => sendFileRaw(conn, f));
+                    document.getElementById('waiting-msg').innerText = "All Files Sent!";
+                    setTimeout(resetApp, 3000);
+                }
+                else if (currentMode === 'device') {
+                    showView('view-device-link');
+                    setupDeviceLinkDragDrop(conn);
+                }
+                else if (currentMode === 'group') {
+                    addLog('group-chat-log', `<div class="text-xs font-mono opacity-50 text-center my-2">User joined</div>`);
+                }
+            });
+
+            conn.on('data', (data) => {
+                handleIncomingData(conn, data);
+            });
+
+            conn.on('close', () => {
+                connections = connections.filter(c => c !== conn);
+                if (currentMode === 'device') resetApp(); // Kill session if 1-to-1 ends
+                if (currentMode === 'group') addLog('group-chat-log', `<div class="text-xs font-mono opacity-50 text-center my-2">User left</div>`);
+            });
+        }
+
+        // --- Process: Guest Join ---
+        function joinCode() {
+            const code = document.getElementById('join-code-input').value.trim().toLowerCase();
+            if (code.length !== 3) return;
+
+            setStatus('Connecting...');
+            document.getElementById('join-code-input').value = '...';
+            isHost = false;
+
+            peer = new Peer();
+            peer.on('open', () => {
+                const conn = peer.connect(PREFIX + code);
+                connections = [conn];
+
+                conn.on('open', () => {
+                    setStatus('Connected');
+                });
+
+                conn.on('data', (data) => {
+                    handleIncomingData(conn, data);
+                });
+
+                conn.on('close', () => {
+                    triggerPopup('Session closed by host.');
+                    resetApp();
+                });
+            });
+
+            peer.on('error', (err) => {
+                triggerPopup('Invalid code or connection failed.');
+                resetApp();
+            });
+        }
+
+        // --- Core Data Handling (Router) ---
+        function handleIncomingData(sourceConn, data) {
+            // Handshake (Guest receives session type from host)
+            if (data.type === 'handshake') {
+                currentMode = data.mode;
+                if (currentMode === 'quick' || currentMode === 'mega') {
+                    setStatus('Receiving...');
+                    // UI stays on home for seamless download as requested
+                    document.getElementById('join-code-input').value = 'Receiving...';
+                }
+                else if (currentMode === 'device') {
+                    showView('view-device-link');
+                    setupDeviceLinkDragDrop(sourceConn);
+                }
+                else if (currentMode === 'group') {
+                    document.getElementById('group-code-header').innerText = 'Joined';
+                    showView('view-group');
+                }
+                return;
+            }
+
+            // Chat Message (Group)
+            if (data.type === 'chat') {
+                if (isHost && currentMode === 'group') {
+                    // Host forwards to other peers
+                    connections.forEach(c => { if(c !== sourceConn) c.send(data); });
+                }
+                addLog('group-chat-log', `<div class="p-2 border-2 border-[#2E3138] rounded bg-white w-fit max-w-[80%]">${data.msg}</div>`);
+            }
+
+            // Raw File 
+            if (data.type === 'file') {
+                const blob = new Blob([data.buffer], { type: data.mime });
+                
+                if (currentMode === 'quick' || currentMode === 'mega') {
+                    downloadBlob(blob, data.name);
+                    document.getElementById('join-code-input').value = 'Done!';
+                    setTimeout(() => { if(!isHost) resetApp(); }, 2000);
+                }
+                else if (currentMode === 'device') {
+                    addLog('device-link-log', `Received: ${data.name}`);
+                    downloadBlob(blob, data.name);
+                    triggerPopup(`Received file: ${data.name}`);
+                }
+                else if (currentMode === 'group') {
+                    if (isHost) {
+                        // Host forwards file to others
+                        connections.forEach(c => { if(c !== sourceConn) c.send(data); });
+                    }
+                    const url = URL.createObjectURL(blob);
+                    addLog('group-file-log', `
+                        <div class="p-2 border-2 border-[#2E3138] flex flex-col gap-1">
+                            <span class="font-bold text-xs truncate">${data.name}</span>
+                            <span class="font-mono text-[10px]">${formatBytes(data.size)}</span>
+                            <a href="${url}" download="${data.name}" class="btn-accent text-center text-xs py-1 mt-1 font-bold">Download</a>
+                        </div>
+                    `);
+                }
+            }
+        }
+
+        // --- Transmitters ---
+        function sendFileRaw(conn, file) {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                conn.send({
+                    type: 'file',
+                    name: file.name,
+                    size: file.size,
+                    mime: file.type,
+                    buffer: e.target.result
+                });
+            };
+            reader.readAsArrayBuffer(file);
+        }
+
+        // Group Handlers
+        function sendGroupChat() {
+            const input = document.getElementById('group-chat-input');
+            const msg = input.value.trim();
+            if (!msg) return;
+
+            const packet = { type: 'chat', msg: msg };
+            connections.forEach(c => c.send(packet));
+            addLog('group-chat-log', `<div class="p-2 border-2 border-[#2E3138] rounded bg-accent text-base w-fit max-w-[80%] self-end">${msg}</div>`);
+            input.value = '';
+        }
+
+        function sendGroupFile(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            connections.forEach(c => sendFileRaw(c, file));
+            addLog('group-file-log', `
+                <div class="p-2 border-2 border-[#2E3138] flex flex-col gap-1 bg-[#2E3138]/5">
+                    <span class="font-bold text-xs truncate">Sent: ${file.name}</span>
+                </div>
+            `);
+        }
+
+        // Device Link Handlers
+        function sendDeviceLinkFile(event) {
+            const files = event.target.files;
+            for(let file of files) {
+                connections.forEach(c => sendFileRaw(c, file));
+                addLog('device-link-log', `Sent: ${file.name}`);
+            }
+        }
+
+        function setupDeviceLinkDragDrop(conn) {
+            const dz = document.getElementById('device-dropzone');
+            
+            dz.ondragover = (e) => {
+                e.preventDefault();
+                dz.classList.add('drag-active');
+            };
+            dz.ondragleave = (e) => {
+                e.preventDefault();
+                dz.classList.remove('drag-active');
+            };
+            dz.ondrop = (e) => {
+                e.preventDefault();
+                dz.classList.remove('drag-active');
+                if (e.dataTransfer.files) {
+                    for(let file of e.dataTransfer.files) {
+                        sendFileRaw(conn, file);
+                        addLog('device-link-log', `Sent: ${file.name}`);
+                    }
+                }
+            };
+        }
+
+        // Key bindings
+        document.getElementById('group-chat-input').addEventListener('keypress', function (e) {
+            if (e.key === 'Enter') sendGroupChat();
+        });
+        document.getElementById('join-code-input').addEventListener('keypress', function (e) {
+            if (e.key === 'Enter') joinCode();
+        });
+
+    </script>
+</body>
+</html>
+
+
