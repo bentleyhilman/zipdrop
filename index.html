@@ -5,6 +5,13 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ZipDrop</title>
 
+    <!-- HTTPS Force Redirect -->
+    <script>
+        if (location.protocol !== 'https:' && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
+            location.replace(`https:${location.href.substring(location.protocol.length)}`);
+        }
+    </script>
+
     <!-- Favicon -->
     <link rel="icon" type="image/png" href="favicon.png">
 
@@ -27,6 +34,8 @@
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <!-- QRCode.js for generating QR Codes -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <!-- JSZip for client-side file compression -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 
     <script>
         tailwind.config = {
@@ -177,9 +186,21 @@
 
                 <button onclick="initSetup('mega')" class="panel p-6 text-left hover:bg-[#2E3138]/5 transition">
                     <h2 class="text-xl font-bold mb-2">Mega Transfer</h2>
-                    <p class="text-sm opacity-80">Select many files. Automatically sends all at once.</p>
+                    <p class="text-sm opacity-80">Select many files. Automatically compresses into a ZIP and sends.</p>
                 </button>
 
+            </div>
+        </div>
+
+        <!-- VIEW: RECEIVER (For Quick Share & Mega Transfer Downloads) -->
+        <div id="view-receiver" class="hidden flex flex-col items-center w-full gap-6">
+            <div class="panel p-8 w-full flex flex-col items-center text-center">
+                <h2 id="receiver-title" class="text-2xl font-bold mb-2">Receiving Files...</h2>
+                <p id="receiver-status-msg" class="text-sm font-semibold opacity-80 mb-6">Please wait while your transfer completes.</p>
+                
+                <button onclick="resetApp()" class="btn-accent py-3 px-8 font-bold text-lg w-full max-w-xs">
+                    Done / Back to Home
+                </button>
             </div>
         </div>
 
@@ -305,12 +326,27 @@
     <script>
         // --- Core State ---
         const PREFIX = 'zpdrp-v3-';
+        
+        // STUN configuration to bypass firewalls, carrier NATs, and cross-network barriers
+        const peerConfig = {
+            config: {
+                iceServers: [
+                    { urls: 'stun:stun.l.google.com:19302' },
+                    { urls: 'stun:stun1.l.google.com:19302' },
+                    { urls: 'stun:stun2.l.google.com:19302' },
+                    { urls: 'stun:stun3.l.google.com:19302' },
+                    { urls: 'stun:stun4.l.google.com:19302' }
+                ]
+            }
+        };
+
         let peer = null;
         let connections = []; 
         let currentMode = null; 
         let currentCode = null;
         let isHost = false;
         let pendingFiles = [];
+        let joinTimeoutTimer = null;
         
         let myUsername = 'Anonymous';
         let nameCallback = null;
@@ -374,6 +410,11 @@
                     wakeLockSentinel = await navigator.wakeLock.request('screen');
                 } catch (err) {}
             }
+            
+            // Re-sync PeerJS socket on mobile wake-up
+            if (document.visibilityState === 'visible' && peer && peer.disconnected) {
+                peer.reconnect();
+            }
         });
 
         window.onload = () => {
@@ -395,6 +436,7 @@
         }
 
         async function resetApp() {
+            if (joinTimeoutTimer) clearTimeout(joinTimeoutTimer);
             if (wakeLockSentinel) {
                 await wakeLockSentinel.release();
                 wakeLockSentinel = null;
@@ -544,7 +586,7 @@
             setStatus('Generating Code...');
 
             currentCode = generateRandomCode();
-            peer = new Peer(PREFIX + currentCode);
+            peer = new Peer(PREFIX + currentCode, peerConfig);
 
             peer.on('open', (id) => {
                 document.getElementById('display-code').innerText = currentCode;
@@ -571,8 +613,8 @@
             });
         }
 
-        function setupHostConnectionLogic(conn) {
-            conn.on('open', () => {
+        async function setupHostConnectionLogic(conn) {
+            conn.on('open', async () => {
                 conn.send({ type: 'handshake', mode: currentMode });
 
                 if (currentMode === 'quick') {
@@ -581,9 +623,25 @@
                     document.getElementById('host-finish-btn').classList.remove('hidden');
                 } 
                 else if (currentMode === 'mega') {
-                    document.getElementById('waiting-msg').innerText = `Sending ${pendingFiles.length} files...`;
-                    pendingFiles.forEach(f => sendFileRaw(conn, f));
-                    document.getElementById('waiting-msg').innerText = "All files transmitted to connected device!";
+                    document.getElementById('waiting-msg').innerText = `Compressing ${pendingFiles.length} files into ZIP...`;
+                    
+                    const zip = new JSZip();
+                    for (const file of pendingFiles) {
+                        zip.file(file.name, file);
+                    }
+                    
+                    const zipContent = await zip.generateAsync({ type: 'arraybuffer' });
+                    
+                    conn.send({
+                        type: 'file',
+                        name: 'ZipDrop-MegaTransfer.zip',
+                        size: zipContent.byteLength,
+                        mime: 'application/zip',
+                        sender: myUsername,
+                        buffer: zipContent
+                    });
+
+                    document.getElementById('waiting-msg').innerText = "Compressed ZIP transmitted to connected device!";
                     document.getElementById('host-finish-btn').classList.remove('hidden');
                 }
                 else if (currentMode === 'device') {
@@ -614,12 +672,24 @@
             document.getElementById('join-code-input').value = '...';
             isHost = false;
 
-            peer = new Peer();
+            // Timeout guard if host doesn't exist yet or connection stalls
+            if (joinTimeoutTimer) clearTimeout(joinTimeoutTimer);
+            joinTimeoutTimer = setTimeout(() => {
+                if (connections.length === 0 || !connections[0].open) {
+                    triggerPopup('Connection timed out. Please check the code and ensure host screen is open.');
+                    resetApp();
+                }
+            }, 12000);
+
+            peer = new Peer(peerConfig);
             peer.on('open', () => {
-                const conn = peer.connect(PREFIX + code);
+                const conn = peer.connect(PREFIX + code, {
+                    reliable: true
+                });
                 connections = [conn];
 
                 conn.on('open', () => {
+                    if (joinTimeoutTimer) clearTimeout(joinTimeoutTimer);
                     setStatus('Connected');
                 });
 
@@ -633,10 +703,17 @@
                         resetApp();
                     }
                 });
+
+                conn.on('error', (err) => {
+                    if (joinTimeoutTimer) clearTimeout(joinTimeoutTimer);
+                    triggerPopup('Connection error. Retrying...');
+                    resetApp();
+                });
             });
 
             peer.on('error', (err) => {
-                triggerPopup('Invalid code or connection failed.');
+                if (joinTimeoutTimer) clearTimeout(joinTimeoutTimer);
+                triggerPopup('Invalid code or host peer not found.');
                 resetApp();
             });
         }
@@ -646,7 +723,9 @@
                 currentMode = data.mode;
                 if (currentMode === 'quick' || currentMode === 'mega') {
                     setStatus('Receiving...');
-                    document.getElementById('join-code-input').value = 'Receiving...';
+                    showView('view-receiver');
+                    document.getElementById('receiver-title').innerText = "Receiving Files...";
+                    document.getElementById('receiver-status-msg').innerText = "Please wait while your transfer completes.";
                 }
                 else if (currentMode === 'device') {
                     showView('view-device-link');
@@ -697,8 +776,9 @@
                     if (!savedToPhotos) {
                         downloadBlob(blob, data.name);
                     }
-                    document.getElementById('join-code-input').value = 'Done!';
                     setStatus('Transfer Complete');
+                    document.getElementById('receiver-title').innerText = "Transfer Complete";
+                    document.getElementById('receiver-status-msg').innerText = "All file(s) have been received and saved.";
                 }
                 else if (currentMode === 'device') {
                     addLog('device-link-log', `Received: ${data.name}`);
@@ -833,3 +913,4 @@
     </script>
 </body>
 </html>
+
