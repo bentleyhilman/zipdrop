@@ -363,14 +363,30 @@
         // --- Core State ---
         const PREFIX = 'zpdrp-v3-';
         
+        // STUN + Free Open Relay TURN Configuration (Bypasses Carrier NATs, Mobile Hotspots & CGNATs)
         const peerConfig = {
             config: {
                 iceServers: [
                     { urls: 'stun:stun.l.google.com:19302' },
                     { urls: 'stun:stun1.l.google.com:19302' },
                     { urls: 'stun:stun2.l.google.com:19302' },
-                    { urls: 'stun:stun3.l.google.com:19302' },
-                    { urls: 'stun:stun4.l.google.com:19302' }
+                    { urls: 'stun:stun.services.mozilla.com' },
+                    { urls: 'stun:global.stun.twilio.com:3478' },
+                    {
+                        urls: 'turn:openrelay.metered.ca:80',
+                        username: 'openrelay',
+                        credential: 'openrelay'
+                    },
+                    {
+                        urls: 'turn:openrelay.metered.ca:443',
+                        username: 'openrelay',
+                        credential: 'openrelay'
+                    },
+                    {
+                        urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+                        username: 'openrelay',
+                        credential: 'openrelay'
+                    }
                 ]
             }
         };
@@ -703,7 +719,12 @@
         }
 
         function setupHostConnectionLogic(conn) {
+            let handled = false;
+
             const handleOpen = async () => {
+                if (handled) return;
+                handled = true;
+                
                 conn.send({ type: 'handshake', mode: currentMode });
 
                 if (currentMode === 'quick') {
@@ -744,7 +765,6 @@
                 }
             };
 
-            // Fix for PeerJS: Trigger open handler immediately if dataChannel is already open
             if (conn.open) {
                 handleOpen();
             } else {
@@ -780,12 +800,13 @@
             if (joinTimeoutTimer) clearTimeout(joinTimeoutTimer);
             joinTimeoutTimer = setTimeout(() => {
                 if (connections.length === 0 || !connections[0].open) {
-                    triggerPopup('Code not found or host screen closed.');
+                    triggerPopup('Code not found or connection timed out.');
                     resetApp();
                 }
-            }, 12000);
+            }, 25000);
 
             peer = new Peer(peerConfig);
+            
             peer.on('open', () => {
                 const conn = peer.connect(PREFIX + code, {
                     reliable: true
@@ -793,8 +814,7 @@
                 connections = [conn];
 
                 const handleConnOpen = () => {
-                    if (joinTimeoutTimer) clearTimeout(joinTimeoutTimer);
-                    setStatus('Connected');
+                    setStatus('Connecting tunnel...');
                 };
 
                 if (conn.open) {
@@ -803,7 +823,23 @@
                     conn.on('open', handleConnOpen);
                 }
 
+                // Monitor ICE candidate state
+                if (conn.peerConnection) {
+                    conn.peerConnection.oniceconnectionstatechange = () => {
+                        const state = conn.peerConnection.iceConnectionState;
+                        if (state === 'connected' || state === 'completed') {
+                            if (joinTimeoutTimer) clearTimeout(joinTimeoutTimer);
+                            setStatus('Connected');
+                        } else if (state === 'failed') {
+                            if (joinTimeoutTimer) clearTimeout(joinTimeoutTimer);
+                            triggerPopup('Connection blocked by network firewall. Retrying...');
+                            resetApp();
+                        }
+                    };
+                }
+
                 conn.on('data', (data) => {
+                    if (joinTimeoutTimer) clearTimeout(joinTimeoutTimer);
                     handleIncomingData(conn, data);
                 });
 
@@ -823,7 +859,11 @@
 
             peer.on('error', (err) => {
                 if (joinTimeoutTimer) clearTimeout(joinTimeoutTimer);
-                triggerPopup('Invalid code or host peer not found.');
+                if (err.type === 'peer-unavailable') {
+                    triggerPopup('Code not found. Make sure the host screen is still open.');
+                } else {
+                    triggerPopup('Invalid code or connection failed.');
+                }
                 resetApp();
             });
         }
@@ -1053,3 +1093,4 @@
     </script>
 </body>
 </html>
+
