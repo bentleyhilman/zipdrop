@@ -195,7 +195,7 @@
         <!-- VIEW: RECEIVER (For File Downloads) -->
         <div id="view-receiver" class="hidden flex flex-col items-center w-full gap-6">
             <div class="panel p-8 w-full flex flex-col items-center text-center">
-                <h2 id="receiver-title" class="text-2xl font-bold mb-2">Receiving Files...</h2>
+                <h2 id="receiver-title" class="text-2xl font-bold mb-2">Receiving...</h2>
                 <p id="receiver-status-msg" class="text-sm font-semibold opacity-80 mb-6">Please wait while your transfer completes.</p>
                 
                 <button onclick="resetApp()" class="btn-accent py-3 px-8 font-bold text-lg w-full max-w-xs">
@@ -245,7 +245,7 @@
                     <textarea id="host-text-input" placeholder="send a message or website..." class="input-box p-3 w-full h-24 font-medium text-base resize-none" oninput="handleSetupTextInput()"></textarea>
                 </div>
 
-                <!-- Generate Code Button moved to bottom of options -->
+                <!-- Generate Code Button -->
                 <button id="setup-start-btn" onclick="startHostSession()" class="btn-accent py-3 font-bold text-lg hidden mt-2">Generate Code</button>
             </div>
 
@@ -394,7 +394,6 @@
                    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
         }
 
-        // Helper to test if a string is a web URL
         function getValidUrl(text) {
             let str = text ? text.trim() : '';
             if (!str) return null;
@@ -598,7 +597,7 @@
         function showQRModal() {
             if (currentCode) {
                 generateQR('modal-qr-container', currentCode);
-                document.getElementById('qr-modal').classList.add('hidden');
+                document.getElementById('qr-modal').classList.remove('hidden');
             }
         }
 
@@ -646,7 +645,6 @@
         function handleSetupFiles(event) {
             pendingFiles = Array.from(event.target.files);
             if (pendingFiles.length > 0) {
-                // Clear text if file selected
                 document.getElementById('host-text-input').value = '';
                 pendingTextPayload = "";
                 document.getElementById('setup-start-btn').classList.remove('hidden');
@@ -660,7 +658,6 @@
             pendingTextPayload = val;
             
             if (val.length > 0) {
-                // Clear selected files if text is entered
                 pendingFiles = [];
                 document.getElementById('host-file-input').value = '';
                 document.getElementById('setup-selected-files').innerHTML = '';
@@ -705,8 +702,8 @@
             });
         }
 
-        async function setupHostConnectionLogic(conn) {
-            conn.on('open', async () => {
+        function setupHostConnectionLogic(conn) {
+            const handleOpen = async () => {
                 conn.send({ type: 'handshake', mode: currentMode });
 
                 if (currentMode === 'quick') {
@@ -745,7 +742,14 @@
                     showView('view-device-link');
                     setupDeviceLinkDragDrop(conn);
                 }
-            });
+            };
+
+            // Fix for PeerJS: Trigger open handler immediately if dataChannel is already open
+            if (conn.open) {
+                handleOpen();
+            } else {
+                conn.on('open', handleOpen);
+            }
 
             conn.on('data', (data) => {
                 handleIncomingData(conn, data);
@@ -788,10 +792,16 @@
                 });
                 connections = [conn];
 
-                conn.on('open', () => {
+                const handleConnOpen = () => {
                     if (joinTimeoutTimer) clearTimeout(joinTimeoutTimer);
                     setStatus('Connected');
-                });
+                };
+
+                if (conn.open) {
+                    handleConnOpen();
+                } else {
+                    conn.on('open', handleConnOpen);
+                }
 
                 conn.on('data', (data) => {
                     handleIncomingData(conn, data);
@@ -842,10 +852,10 @@
             }
 
             if (data.type === 'text') {
+                if (joinTimeoutTimer) clearTimeout(joinTimeoutTimer);
                 const validUrl = getValidUrl(data.content);
                 
                 if (validUrl) {
-                    // Redirect straight to link if URL detected
                     window.location.href = validUrl;
                     return;
                 }
@@ -853,7 +863,6 @@
                 if (currentMode === 'device') {
                     addLog('device-link-log', `<b>Received Text:</b> ${data.content}`);
                 } else {
-                    // Show Received Text full page
                     showView('view-text-received');
                     document.getElementById('received-text-content').innerText = data.content;
                     setStatus('Text Received');
@@ -885,6 +894,7 @@
             }
 
             if (data.type === 'file') {
+                if (joinTimeoutTimer) clearTimeout(joinTimeoutTimer);
                 const blob = new Blob([data.buffer], { type: data.mime });
                 const isImage = data.mime && data.mime.startsWith('image/');
                 
@@ -1043,4 +1053,3 @@
     </script>
 </body>
 </html>
-
