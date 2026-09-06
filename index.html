@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ZipDrop</title>
-    <script src="https://cdn.jsdelivr.net/npm/webtorrent@latest/webtorrent.min.js"></script>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
     <style>
         :root {
@@ -72,9 +72,7 @@
             border: 2px dashed var(--text-color);
         }
 
-        #dragOverlay.visible {
-            opacity: 1;
-        }
+        #dragOverlay.visible { opacity: 1; }
 
         .brand-logo {
             font-size: 2.2rem;
@@ -88,6 +86,7 @@
             font-weight: 500;
             color: var(--accent-color);
             letter-spacing: 0.5px;
+            text-align: center;
         }
 
         .big-code {
@@ -118,7 +117,6 @@
             color: var(--text-color);
             outline: none;
             letter-spacing: 6px;
-            transition: border-color 0.2s;
         }
 
         input[type="text"]::placeholder {
@@ -140,9 +138,7 @@
             outline: none;
         }
 
-        .btn:active {
-            transform: scale(0.96);
-        }
+        .btn:active { transform: scale(0.96); }
 
         .btn-secondary {
             background-color: transparent;
@@ -173,9 +169,7 @@
             margin-bottom: 24px;
         }
 
-        #qrcode img {
-            display: block;
-        }
+        #qrcode img { display: block; }
 
         .progress-track {
             width: 100%;
@@ -194,9 +188,7 @@
             transition: width 0.15s ease-out;
         }
 
-        .pulse {
-            animation: pulse-animation 1.8s infinite ease-in-out;
-        }
+        .pulse { animation: pulse-animation 1.8s infinite ease-in-out; }
 
         @keyframes pulse-animation {
             0% { opacity: 0.4; }
@@ -204,9 +196,7 @@
             100% { opacity: 0.4; }
         }
 
-        #fileInput {
-            display: none;
-        }
+        #fileInput { display: none; }
     </style>
 </head>
 <body>
@@ -216,13 +206,11 @@
 
     <div id="screenHome" class="screen active">
         <div class="brand-logo">ZipDrop</div>
-        
         <div class="center-card">
             <div class="code-input-wrap">
                 <input type="text" id="codeInput" placeholder="···" maxlength="3" autocomplete="off" spellcheck="false">
             </div>
         </div>
-
         <button class="btn" onclick="document.getElementById('fileInput').click()">Upload File</button>
     </div>
 
@@ -239,7 +227,7 @@
     <div id="screenConnecting" class="screen">
         <div></div>
         <div class="center-card">
-            <div class="status-heading pulse">Locating peer...</div>
+            <div class="status-heading pulse" id="connectingText">Connecting...</div>
         </div>
         <div></div>
     </div>
@@ -275,10 +263,13 @@
     </div>
 
     <script>
-        const client = new WebTorrent();
-        let activeTorrent = null;
+        const PREFIX = 'zipdrop-v6-';
+        const CHUNK_SIZE = 64 * 1024;
+        
+        let peer = null;
         let fileToShare = null;
         let currentCode = '';
+        let connectionTimeout = null;
 
         const dragOverlay = document.getElementById('dragOverlay');
         const fileInput = document.getElementById('fileInput');
@@ -299,43 +290,29 @@
             return result;
         }
 
-        // Mapping 3-character code to a deterministic Magnet InfoHash prefix
-        function codeToInfoHash(code) {
-            return `zipdrop-v5-${code.toUpperCase()}`;
-        }
-
-        // Fullscreen Drag & Drop
         window.addEventListener('dragover', (e) => {
             e.preventDefault();
             dragOverlay.classList.add('visible');
         });
 
         window.addEventListener('dragleave', (e) => {
-            if (e.clientX === 0 && e.clientY === 0) {
-                dragOverlay.classList.remove('visible');
-            }
+            if (e.clientX === 0 && e.clientY === 0) dragOverlay.classList.remove('visible');
         });
 
         window.addEventListener('drop', (e) => {
             e.preventDefault();
             dragOverlay.classList.remove('visible');
-            if (e.dataTransfer.files.length > 0) {
-                handleFileSelect(e.dataTransfer.files[0]);
-            }
+            if (e.dataTransfer.files.length > 0) handleFileSelect(e.dataTransfer.files[0]);
         });
 
         fileInput.addEventListener('change', (e) => {
-            if (e.target.files.length > 0) {
-                handleFileSelect(e.target.files[0]);
-            }
+            if (e.target.files.length > 0) handleFileSelect(e.target.files[0]);
         });
 
         codeInput.addEventListener('input', (e) => {
             const val = e.target.value.toUpperCase();
             e.target.value = val;
-            if (val.length === 3) {
-                startReceiving(val);
-            }
+            if (val.length === 3) startReceiving(val);
         });
 
         function handleFileSelect(file) {
@@ -360,33 +337,43 @@
 
             showScreen('screenSendCode');
 
-            if (activeTorrent) activeTorrent.destroy();
+            if (peer) peer.destroy();
+            peer = new Peer(PREFIX + currentCode);
 
-            // Seed file via WebTorrent tracker mesh
-            client.seed(fileToShare, {
-                announce: [
-                    'wss://tracker.openwebtorrent.com',
-                    'wss://tracker.btorrent.xyz',
-                    'wss://tracker.files.fm:7072/announce',
-                    'wss://tracker.fastcast.nz'
-                ]
-            }, (torrent) => {
-                activeTorrent = torrent;
-                
-                // Store torrent magnet mapping in localStorage for cross-tab or short-link lookup
-                localStorage.setItem(codeToInfoHash(currentCode), torrent.magnetURI);
+            peer.on('connection', (conn) => {
+                showScreen('screenConnecting');
+                document.getElementById('connectingText').innerText = "Connecting...";
 
-                torrent.on('wire', () => {
+                conn.on('open', async () => {
                     showScreen('screenTransferring');
                     document.getElementById('transferLabel').innerText = "Sending...";
-                });
+                    
+                    conn.send({
+                        type: 'meta',
+                        filename: fileToShare.name,
+                        filetype: fileToShare.type,
+                        filesize: fileToShare.size
+                    });
 
-                torrent.on('upload', () => {
-                    const progress = Math.min(100, Math.round(torrent.progress * 100));
-                    document.getElementById('progressFill').style.width = `${progress}%`;
-                    if (progress >= 100) {
-                        showScreen('screenSendSuccess');
+                    let offset = 0;
+                    const totalSize = fileToShare.size;
+
+                    while (offset < totalSize) {
+                        if (conn.dataChannel && conn.dataChannel.bufferedAmount > 8 * 1024 * 1024) {
+                            await new Promise(r => setTimeout(r, 50));
+                            continue;
+                        }
+
+                        const slice = fileToShare.slice(offset, offset + CHUNK_SIZE);
+                        const buffer = await slice.arrayBuffer();
+                        conn.send(buffer);
+
+                        offset += CHUNK_SIZE;
+                        const progress = Math.min(100, (offset / totalSize) * 100);
+                        document.getElementById('progressFill').style.width = `${progress}%`;
                     }
+
+                    showScreen('screenSendSuccess');
                 });
             });
         }
@@ -397,54 +384,71 @@
 
         function startReceiving(code) {
             showScreen('screenConnecting');
+            document.getElementById('connectingText').innerText = "Connecting...";
 
-            // Look up magnet URI from local storage or construct direct fallback
-            let magnetURI = localStorage.getItem(codeToInfoHash(code));
+            if (peer) peer.destroy();
+            peer = new Peer();
 
-            if (!magnetURI) {
-                // Public tracker fallback search
-                magnetURI = `magnet:?xt=urn:btih:${codeToInfoHash(code)}&dn=ZipDropFile&tr=wss%3A%2F%2Ftracker.openwebtorrent.com&tr=wss%3A%2F%2Ftracker.btorrent.xyz`;
-            }
+            // Timeout check if code is invalid or sender tab is closed
+            connectionTimeout = setTimeout(() => {
+                alert("Could not connect. Please verify the code or ensure the sender's tab is open.");
+                resetToHome();
+            }, 10000);
 
-            if (activeTorrent) activeTorrent.destroy();
+            peer.on('open', () => {
+                const conn = peer.connect(PREFIX + code);
+                
+                let fileMeta = null;
+                let receivedBytes = 0;
+                let chunks = [];
 
-            client.add(magnetURI, {
-                announce: [
-                    'wss://tracker.openwebtorrent.com',
-                    'wss://tracker.btorrent.xyz',
-                    'wss://tracker.files.fm:7072/announce',
-                    'wss://tracker.fastcast.nz'
-                ]
-            }, (torrent) => {
-                activeTorrent = torrent;
-
-                torrent.on('download', () => {
+                conn.on('open', () => {
+                    clearTimeout(connectionTimeout);
                     showScreen('screenTransferring');
                     document.getElementById('transferLabel').innerText = "Downloading...";
-                    const progress = Math.min(100, Math.round(torrent.progress * 100));
-                    document.getElementById('progressFill').style.width = `${progress}%`;
                 });
 
-                torrent.on('done', () => {
-                    const file = torrent.files[0];
-                    file.getBlobURL((err, url) => {
-                        if (err) return resetToHome();
+                conn.on('data', (data) => {
+                    if (data && data.type === 'meta') {
+                        fileMeta = data;
+                        return;
+                    }
+
+                    chunks.push(data);
+                    receivedBytes += data.byteLength;
+
+                    if (fileMeta) {
+                        const progress = Math.min(100, (receivedBytes / fileMeta.filesize) * 100);
+                        document.getElementById('progressFill').style.width = `${progress}%`;
+                    }
+
+                    if (fileMeta && receivedBytes >= fileMeta.filesize) {
+                        const blob = new Blob(chunks, { type: fileMeta.filetype });
+                        const url = URL.createObjectURL(blob);
                         
                         const a = document.createElement('a');
                         a.href = url;
-                        a.download = file.name;
+                        a.download = fileMeta.filename;
                         document.body.appendChild(a);
                         a.click();
                         document.body.removeChild(a);
+                        URL.revokeObjectURL(url);
 
                         showScreen('screenReceiveSuccess');
-                    });
+                    }
                 });
+            });
+
+            peer.on('error', () => {
+                clearTimeout(connectionTimeout);
+                alert("Invalid code or sender unavailable.");
+                resetToHome();
             });
         }
 
         function resetToHome() {
-            if (activeTorrent) activeTorrent.destroy();
+            if (connectionTimeout) clearTimeout(connectionTimeout);
+            if (peer) peer.destroy();
             fileToShare = null;
             codeInput.value = '';
             document.getElementById('progressFill').style.width = '0%';
