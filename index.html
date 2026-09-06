@@ -263,13 +263,14 @@
     </div>
 
     <script>
-        const PREFIX = 'zipdrop-v6-';
+        const PREFIX = 'zipdrop-v7-';
         const CHUNK_SIZE = 64 * 1024;
         
         let peer = null;
         let fileToShare = null;
         let currentCode = '';
-        let connectionTimeout = null;
+        let retryCount = 0;
+        let retryTimer = null;
 
         const dragOverlay = document.getElementById('dragOverlay');
         const fileInput = document.getElementById('fileInput');
@@ -338,7 +339,10 @@
             showScreen('screenSendCode');
 
             if (peer) peer.destroy();
-            peer = new Peer(PREFIX + currentCode);
+            peer = new Peer(PREFIX + currentCode, {
+                config: { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] },
+                debug: 1
+            });
 
             peer.on('connection', (conn) => {
                 showScreen('screenConnecting');
@@ -383,27 +387,32 @@
         }
 
         function startReceiving(code) {
+            retryCount = 0;
+            attemptConnection(code);
+        }
+
+        function attemptConnection(code) {
             showScreen('screenConnecting');
-            document.getElementById('connectingText').innerText = "Connecting...";
+            document.getElementById('connectingText').innerText = retryCount > 0 ? `Retrying (${retryCount}/3)...` : "Connecting...";
 
             if (peer) peer.destroy();
-            peer = new Peer();
-
-            // Timeout check if code is invalid or sender tab is closed
-            connectionTimeout = setTimeout(() => {
-                alert("Could not connect. Please verify the code or ensure the sender's tab is open.");
-                resetToHome();
-            }, 10000);
+            peer = new Peer({
+                config: { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] },
+                debug: 1
+            });
 
             peer.on('open', () => {
-                const conn = peer.connect(PREFIX + code);
+                const conn = peer.connect(PREFIX + code, { reliable: true });
                 
                 let fileMeta = null;
                 let receivedBytes = 0;
                 let chunks = [];
 
+                let connected = false;
+
                 conn.on('open', () => {
-                    clearTimeout(connectionTimeout);
+                    connected = true;
+                    if (retryTimer) clearTimeout(retryTimer);
                     showScreen('screenTransferring');
                     document.getElementById('transferLabel').innerText = "Downloading...";
                 });
@@ -437,17 +446,34 @@
                         showScreen('screenReceiveSuccess');
                     }
                 });
+
+                // Auto-retry trigger if PeerJS signaling drops initially
+                retryTimer = setTimeout(() => {
+                    if (!connected) {
+                        if (retryCount < 3) {
+                            retryCount++;
+                            attemptConnection(code);
+                        } else {
+                            alert("Could not connect to sender. Check code or verify their tab is open.");
+                            resetToHome();
+                        }
+                    }
+                }, 3500);
             });
 
-            peer.on('error', () => {
-                clearTimeout(connectionTimeout);
-                alert("Invalid code or sender unavailable.");
-                resetToHome();
+            peer.on('error', (err) => {
+                if (retryCount < 3) {
+                    retryCount++;
+                    setTimeout(() => attemptConnection(code), 1000);
+                } else {
+                    alert("Invalid code or sender unavailable.");
+                    resetToHome();
+                }
             });
         }
 
         function resetToHome() {
-            if (connectionTimeout) clearTimeout(connectionTimeout);
+            if (retryTimer) clearTimeout(retryTimer);
             if (peer) peer.destroy();
             fileToShare = null;
             codeInput.value = '';
