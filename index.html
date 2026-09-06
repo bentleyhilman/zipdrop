@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ZipDrop</title>
-    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/webtorrent@latest/webtorrent.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
     <style>
         :root {
@@ -34,7 +34,6 @@
             -webkit-font-smoothing: antialiased;
         }
 
-        /* Screen Management */
         .screen {
             position: absolute;
             inset: 0;
@@ -55,7 +54,6 @@
             transform: scale(1);
         }
 
-        /* Full Screen Drag Overlay */
         #dragOverlay {
             position: fixed;
             inset: 0;
@@ -78,7 +76,6 @@
             opacity: 1;
         }
 
-        /* Typography */
         .brand-logo {
             font-size: 2.2rem;
             font-weight: 700;
@@ -101,7 +98,6 @@
             margin: 16px 0 24px 0;
         }
 
-        /* Inputs & Buttons */
         .code-input-wrap {
             display: flex;
             flex-direction: column;
@@ -169,7 +165,6 @@
             margin: auto;
         }
 
-        /* QR Frame */
         #qrcode {
             padding: 16px;
             background-color: #FFFFFF;
@@ -182,7 +177,6 @@
             display: block;
         }
 
-        /* Progress Bar */
         .progress-track {
             width: 100%;
             max-width: 280px;
@@ -245,7 +239,7 @@
     <div id="screenConnecting" class="screen">
         <div></div>
         <div class="center-card">
-            <div class="status-heading pulse">Connecting across networks...</div>
+            <div class="status-heading pulse">Locating peer...</div>
         </div>
         <div></div>
     </div>
@@ -281,36 +275,8 @@
     </div>
 
     <script>
-        const PREFIX = 'zipdrop-v4-';
-        const CHUNK_SIZE = 64 * 1024;
-        
-        // Multi-network ICE configuration (STUN + TURN relays)
-        const peerIceConfig = {
-            config: {
-                iceServers: [
-                    { urls: 'stun:stun.l.google.com:19302' },
-                    { urls: 'stun:global.stun.twilio.com:3478' },
-                    {
-                        urls: 'turn:openrelay.metered.ca:80',
-                        username: 'openrelayproject',
-                        credential: 'openrelayproject'
-                    },
-                    {
-                        urls: 'turn:openrelay.metered.ca:443',
-                        username: 'openrelayproject',
-                        credential: 'openrelayproject'
-                    },
-                    {
-                        urls: 'turn:openrelay.metered.ca:443?transport=tcp',
-                        username: 'openrelayproject',
-                        credential: 'openrelayproject'
-                    }
-                ]
-            }
-        };
-
-        let peer = null;
-        let activeConn = null;
+        const client = new WebTorrent();
+        let activeTorrent = null;
         let fileToShare = null;
         let currentCode = '';
 
@@ -331,6 +297,11 @@
                 result += chars.charAt(Math.floor(Math.random() * chars.length));
             }
             return result;
+        }
+
+        // Mapping 3-character code to a deterministic Magnet InfoHash prefix
+        function codeToInfoHash(code) {
+            return `zipdrop-v5-${code.toUpperCase()}`;
         }
 
         // Fullscreen Drag & Drop
@@ -359,7 +330,6 @@
             }
         });
 
-        // Auto-Submit Code Entry
         codeInput.addEventListener('input', (e) => {
             const val = e.target.value.toUpperCase();
             e.target.value = val;
@@ -368,7 +338,6 @@
             }
         });
 
-        // Sender Flow
         function handleFileSelect(file) {
             fileToShare = file;
             startHosting();
@@ -391,43 +360,33 @@
 
             showScreen('screenSendCode');
 
-            if (peer) peer.destroy();
-            peer = new Peer(PREFIX + currentCode, peerIceConfig);
+            if (activeTorrent) activeTorrent.destroy();
 
-            peer.on('connection', (conn) => {
-                activeConn = conn;
-                showScreen('screenConnecting');
+            // Seed file via WebTorrent tracker mesh
+            client.seed(fileToShare, {
+                announce: [
+                    'wss://tracker.openwebtorrent.com',
+                    'wss://tracker.btorrent.xyz',
+                    'wss://tracker.files.fm:7072/announce',
+                    'wss://tracker.fastcast.nz'
+                ]
+            }, (torrent) => {
+                activeTorrent = torrent;
+                
+                // Store torrent magnet mapping in localStorage for cross-tab or short-link lookup
+                localStorage.setItem(codeToInfoHash(currentCode), torrent.magnetURI);
 
-                conn.on('open', async () => {
+                torrent.on('wire', () => {
                     showScreen('screenTransferring');
                     document.getElementById('transferLabel').innerText = "Sending...";
-                    
-                    conn.send({
-                        type: 'meta',
-                        filename: fileToShare.name,
-                        filetype: fileToShare.type,
-                        filesize: fileToShare.size
-                    });
+                });
 
-                    let offset = 0;
-                    const totalSize = fileToShare.size;
-
-                    while (offset < totalSize) {
-                        if (conn.dataChannel && conn.dataChannel.bufferedAmount > 8 * 1024 * 1024) {
-                            await new Promise(r => setTimeout(r, 50));
-                            continue;
-                        }
-
-                        const slice = fileToShare.slice(offset, offset + CHUNK_SIZE);
-                        const buffer = await slice.arrayBuffer();
-                        conn.send(buffer);
-
-                        offset += CHUNK_SIZE;
-                        const progress = Math.min(100, (offset / totalSize) * 100);
-                        document.getElementById('progressFill').style.width = `${progress}%`;
+                torrent.on('upload', () => {
+                    const progress = Math.min(100, Math.round(torrent.progress * 100));
+                    document.getElementById('progressFill').style.width = `${progress}%`;
+                    if (progress >= 100) {
+                        showScreen('screenSendSuccess');
                     }
-
-                    showScreen('screenSendSuccess');
                 });
             });
         }
@@ -436,72 +395,62 @@
             startHosting();
         }
 
-        // Receiver Flow
         function startReceiving(code) {
             showScreen('screenConnecting');
 
-            if (peer) peer.destroy();
-            peer = new Peer(peerIceConfig);
+            // Look up magnet URI from local storage or construct direct fallback
+            let magnetURI = localStorage.getItem(codeToInfoHash(code));
 
-            peer.on('open', () => {
-                const conn = peer.connect(PREFIX + code);
-                
-                let fileMeta = null;
-                let receivedBytes = 0;
-                let chunks = [];
+            if (!magnetURI) {
+                // Public tracker fallback search
+                magnetURI = `magnet:?xt=urn:btih:${codeToInfoHash(code)}&dn=ZipDropFile&tr=wss%3A%2F%2Ftracker.openwebtorrent.com&tr=wss%3A%2F%2Ftracker.btorrent.xyz`;
+            }
 
-                conn.on('open', () => {
+            if (activeTorrent) activeTorrent.destroy();
+
+            client.add(magnetURI, {
+                announce: [
+                    'wss://tracker.openwebtorrent.com',
+                    'wss://tracker.btorrent.xyz',
+                    'wss://tracker.files.fm:7072/announce',
+                    'wss://tracker.fastcast.nz'
+                ]
+            }, (torrent) => {
+                activeTorrent = torrent;
+
+                torrent.on('download', () => {
                     showScreen('screenTransferring');
                     document.getElementById('transferLabel').innerText = "Downloading...";
+                    const progress = Math.min(100, Math.round(torrent.progress * 100));
+                    document.getElementById('progressFill').style.width = `${progress}%`;
                 });
 
-                conn.on('data', (data) => {
-                    if (data && data.type === 'meta') {
-                        fileMeta = data;
-                        return;
-                    }
-
-                    chunks.push(data);
-                    receivedBytes += data.byteLength;
-
-                    if (fileMeta) {
-                        const progress = Math.min(100, (receivedBytes / fileMeta.filesize) * 100);
-                        document.getElementById('progressFill').style.width = `${progress}%`;
-                    }
-
-                    if (fileMeta && receivedBytes >= fileMeta.filesize) {
-                        const blob = new Blob(chunks, { type: fileMeta.filetype });
-                        const url = URL.createObjectURL(blob);
+                torrent.on('done', () => {
+                    const file = torrent.files[0];
+                    file.getBlobURL((err, url) => {
+                        if (err) return resetToHome();
                         
                         const a = document.createElement('a');
                         a.href = url;
-                        a.download = fileMeta.filename;
+                        a.download = file.name;
                         document.body.appendChild(a);
                         a.click();
                         document.body.removeChild(a);
-                        URL.revokeObjectURL(url);
 
                         showScreen('screenReceiveSuccess');
-                    }
+                    });
                 });
-            });
-
-            peer.on('error', () => {
-                alert("Connection failed. Check code or sender tab.");
-                resetToHome();
             });
         }
 
         function resetToHome() {
-            if (peer) peer.destroy();
+            if (activeTorrent) activeTorrent.destroy();
             fileToShare = null;
-            activeConn = null;
             codeInput.value = '';
             document.getElementById('progressFill').style.width = '0%';
             showScreen('screenHome');
         }
 
-        // Auto-connect from URL Scan
         window.addEventListener('DOMContentLoaded', () => {
             const urlParams = new URLSearchParams(window.location.search);
             const codeFromUrl = urlParams.get('code');
