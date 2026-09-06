@@ -3,14 +3,14 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ZipDrop | Simple File Sharing</title>
+    <title>ZipDrop | Fast P2P File Sharing</title>
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
     <style>
         :root {
-            --bg-color: #FAF9F6; /* Cream */
-            --text-color: #2C1E16; /* Dark Brown/Black */
-            --accent-color: #4A3B32; /* Lighter Brown */
+            --bg-color: #FAF9F6;
+            --text-color: #2C1E16;
+            --accent-color: #4A3B32;
         }
 
         body {
@@ -44,7 +44,6 @@
             margin-bottom: 30px;
         }
 
-        /* Receive Section */
         .receive-section {
             margin-bottom: 30px;
             padding-bottom: 30px;
@@ -81,7 +80,6 @@
             opacity: 0.8;
         }
 
-        /* Send Section */
         .drop-zone {
             border: 2px dashed var(--text-color);
             border-radius: 12px;
@@ -112,7 +110,6 @@
             letter-spacing: 4px;
         }
 
-        /* QR Code Container */
         #qrcode {
             margin: 20px auto 10px auto;
             display: flex;
@@ -127,13 +124,30 @@
         #qrcode img {
             display: block;
         }
+
+        .progress-bar-container {
+            width: 100%;
+            background-color: rgba(74, 59, 50, 0.1);
+            border-radius: 8px;
+            height: 12px;
+            margin-top: 15px;
+            overflow: hidden;
+            display: none;
+        }
+
+        .progress-bar {
+            height: 100%;
+            background-color: var(--text-color);
+            width: 0%;
+            transition: width 0.1s ease;
+        }
     </style>
 </head>
 <body>
 
     <div class="container">
         <h1>ZipDrop</h1>
-        <p>Peer-to-peer file transfer.</p>
+        <p>High-speed peer-to-peer file transfer.</p>
 
         <div class="receive-section">
             <h3>Download a File</h3>
@@ -150,12 +164,17 @@
         </div>
 
         <div id="statusText" class="status"></div>
+        <div class="progress-bar-container" id="progressContainer">
+            <div class="progress-bar" id="progressBar"></div>
+        </div>
         <div id="codeDisplay" class="code-display"></div>
         <div id="qrcode"></div>
     </div>
 
     <script>
-        const PREFIX = 'zipdrop-v1-';
+        const PREFIX = 'zipdrop-v2-';
+        const CHUNK_SIZE = 64 * 1024; // 64KB per chunk for optimal WebRTC throughput
+        
         let peer = null;
         let fileToShare = null;
 
@@ -165,9 +184,21 @@
         const statusText = document.getElementById('statusText');
         const codeDisplay = document.getElementById('codeDisplay');
         const qrContainer = document.getElementById('qrcode');
+        const progressContainer = document.getElementById('progressContainer');
+        const progressBar = document.getElementById('progressBar');
 
         function setStatus(msg) {
             statusText.innerText = msg;
+        }
+
+        function updateProgress(percent) {
+            progressContainer.style.display = 'block';
+            progressBar.style.width = `${percent}%`;
+        }
+
+        function resetProgress() {
+            progressContainer.style.display = 'none';
+            progressBar.style.width = '0%';
         }
 
         function generateCode() {
@@ -208,25 +239,31 @@
             startHosting();
         }
 
-        // Host the file and render the QR code
+        // Host the file and send in streamed binary chunks
         function startHosting() {
             setStatus("Generating code & QR...");
             const code = generateCode();
             
             if (peer) peer.destroy();
 
-            peer = new Peer(PREFIX + code);
+            // Configured with Google's public STUN servers for direct P2P hole punching
+            peer = new Peer(PREFIX + code, {
+                config: {
+                    iceServers: [
+                        { urls: 'stun:stun.l.google.com:19302' },
+                        { urls: 'stun:stun1.l.google.com:19302' }
+                    ]
+                }
+            });
 
             peer.on('open', () => {
                 setStatus("Ready! Scan QR or give code to receiver. Keep tab open.");
                 codeDisplay.innerText = code;
                 dropZone.style.display = "none";
 
-                // Generate full shareable URL
                 const baseUrl = window.location.href.split('?')[0];
                 const shareableUrl = `${baseUrl}?code=${code}`;
 
-                // Clear previous QR and generate new one
                 qrContainer.innerHTML = "";
                 new QRCode(qrContainer, {
                     text: shareableUrl,
@@ -239,20 +276,39 @@
             });
 
             peer.on('connection', (conn) => {
-                setStatus("Receiver connected! Sending file...");
+                setStatus("Receiver connected! Streaming file...");
+                resetProgress();
                 
-                conn.on('open', () => {
+                conn.on('open', async () => {
+                    // Send metadata first
                     conn.send({
-                        file: fileToShare,
+                        type: 'meta',
                         filename: fileToShare.name,
-                        filetype: fileToShare.type
+                        filetype: fileToShare.type,
+                        filesize: fileToShare.size
                     });
-                });
 
-                conn.on('data', (data) => {
-                    if (data === 'SUCCESS') {
-                        setStatus("Transfer complete!");
+                    // Stream raw array buffer chunks
+                    let offset = 0;
+                    const totalSize = fileToShare.size;
+
+                    while (offset < totalSize) {
+                        // Backpressure control: wait if RTC buffer is backed up
+                        if (conn.dataChannel && conn.dataChannel.bufferedAmount > 8 * 1024 * 1024) {
+                            await new Promise(r => setTimeout(r, 50));
+                            continue;
+                        }
+
+                        const slice = fileToShare.slice(offset, offset + CHUNK_SIZE);
+                        const buffer = await slice.arrayBuffer();
+                        conn.send(buffer);
+
+                        offset += CHUNK_SIZE;
+                        const progress = Math.min(100, Math.round((offset / totalSize) * 100));
+                        updateProgress(progress);
                     }
+
+                    setStatus("File fully sent!");
                 });
             });
 
@@ -262,7 +318,7 @@
             });
         }
 
-        // Receive file logic
+        // Receive file logic with chunk reassembly
         function receiveFile(targetCode = null) {
             const code = (targetCode || codeInput.value).toUpperCase();
             if (code.length !== 3) {
@@ -272,31 +328,62 @@
 
             codeInput.value = code;
             setStatus("Connecting to sender...");
+            resetProgress();
             
             if (peer) peer.destroy();
-            peer = new Peer();
+            peer = new Peer({
+                config: {
+                    iceServers: [
+                        { urls: 'stun:stun.l.google.com:19302' },
+                        { urls: 'stun:stun1.l.google.com:19302' }
+                    ]
+                }
+            });
 
             peer.on('open', () => {
                 const conn = peer.connect(PREFIX + code);
                 
+                let fileMeta = null;
+                let receivedBytes = 0;
+                let chunks = [];
+
                 conn.on('open', () => {
-                    setStatus("Connected! Downloading file...");
+                    setStatus("Connected! Waiting for transfer to start...");
                 });
 
                 conn.on('data', (data) => {
-                    const blob = new Blob([data.file], { type: data.filetype });
-                    const url = URL.createObjectURL(blob);
-                    
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = data.filename;
-                    document.body.appendChild(a);
-                    a.click();
-                    document.body.removeChild(a);
-                    URL.revokeObjectURL(url);
+                    // Step 1: Read Metadata
+                    if (data && data.type === 'meta') {
+                        fileMeta = data;
+                        setStatus(`Receiving: ${fileMeta.filename}`);
+                        return;
+                    }
 
-                    setStatus("Download complete!");
-                    conn.send('SUCCESS');
+                    // Step 2: Accumulate Chunks
+                    chunks.push(data);
+                    receivedBytes += data.byteLength;
+
+                    if (fileMeta) {
+                        const progress = Math.min(100, Math.round((receivedBytes / fileMeta.filesize) * 100));
+                        updateProgress(progress);
+                    }
+
+                    // Step 3: Trigger Download once complete
+                    if (fileMeta && receivedBytes >= fileMeta.filesize) {
+                        setStatus("Assembling file...");
+                        const blob = new Blob(chunks, { type: fileMeta.filetype });
+                        const url = URL.createObjectURL(blob);
+                        
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = fileMeta.filename;
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                        URL.revokeObjectURL(url);
+
+                        setStatus("Download complete!");
+                    }
                 });
             });
 
@@ -305,7 +392,6 @@
             });
         }
 
-        // Auto-detect code from URL parameter when scanned via QR code
         window.addEventListener('DOMContentLoaded', () => {
             const urlParams = new URLSearchParams(window.location.search);
             const codeFromUrl = urlParams.get('code');
