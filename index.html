@@ -204,6 +204,7 @@
     <div id="dragOverlay">DROP FILE TO SEND</div>
     <input type="file" id="fileInput">
 
+    <!-- HOME SCREEN -->
     <div id="screenHome" class="screen active">
         <div class="brand-logo">ZipDrop</div>
         <div class="center-card">
@@ -214,6 +215,7 @@
         <button class="btn" onclick="document.getElementById('fileInput').click()">Upload File</button>
     </div>
 
+    <!-- SENDER: QR & CODE SCREEN -->
     <div id="screenSendCode" class="screen">
         <div></div>
         <div class="center-card">
@@ -224,6 +226,7 @@
         <button class="btn btn-secondary" onclick="resetToHome()">Cancel</button>
     </div>
 
+    <!-- SHARED: CONNECTING SCREEN -->
     <div id="screenConnecting" class="screen">
         <div></div>
         <div class="center-card">
@@ -232,6 +235,7 @@
         <div></div>
     </div>
 
+    <!-- SHARED: TRANSFERRING SCREEN -->
     <div id="screenTransferring" class="screen">
         <div></div>
         <div class="center-card">
@@ -243,6 +247,7 @@
         <div></div>
     </div>
 
+    <!-- SENDER: SUCCESS SCREEN -->
     <div id="screenSendSuccess" class="screen">
         <div></div>
         <div class="center-card">
@@ -254,6 +259,7 @@
         </div>
     </div>
 
+    <!-- RECEIVER: SUCCESS SCREEN -->
     <div id="screenReceiveSuccess" class="screen">
         <div></div>
         <div class="center-card">
@@ -263,14 +269,28 @@
     </div>
 
     <script>
-        const PREFIX = 'zipdrop-v7-';
+        const PREFIX = 'zipdrop-v9-';
         const CHUNK_SIZE = 64 * 1024;
-        
+        const TEN_MB = 10 * 1024 * 1024; // 10MB in Bytes
+
+        // Free OpenRelay TURN Configuration (20 GB Monthly Bandwidth)
+        const METERED_TURN_CONFIG = {
+            iceServers: [
+                { urls: 'stun:openrelay.metered.ca:80' },
+                { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
+                { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
+                { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' }
+            ]
+        };
+
+        const LOCAL_STUN_CONFIG = {
+            iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+        };
+
         let peer = null;
         let fileToShare = null;
         let currentCode = '';
-        let retryCount = 0;
-        let retryTimer = null;
+        let fallbackTimer = null;
 
         const dragOverlay = document.getElementById('dragOverlay');
         const fileInput = document.getElementById('fileInput');
@@ -321,28 +341,9 @@
             startHosting();
         }
 
-        function startHosting() {
-            currentCode = generateCode();
-            document.getElementById('displayCode').innerText = currentCode;
-
-            const baseUrl = window.location.href.split('?')[0];
-            qrContainer.innerHTML = "";
-            new QRCode(qrContainer, {
-                text: `${baseUrl}?code=${currentCode}`,
-                width: 140,
-                height: 140,
-                colorDark: "#2C1E16",
-                colorLight: "#FFFFFF",
-                correctLevel: QRCode.CorrectLevel.H
-            });
-
-            showScreen('screenSendCode');
-
+        function createHostPeer(config) {
             if (peer) peer.destroy();
-            peer = new Peer(PREFIX + currentCode, {
-                config: { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] },
-                debug: 1
-            });
+            peer = new Peer(PREFIX + currentCode, { config: config });
 
             peer.on('connection', (conn) => {
                 showScreen('screenConnecting');
@@ -382,98 +383,131 @@
             });
         }
 
+        function startHosting() {
+            currentCode = generateCode();
+            document.getElementById('displayCode').innerText = currentCode;
+
+            const baseUrl = window.location.href.split('?')[0];
+            qrContainer.innerHTML = "";
+            new QRCode(qrContainer, {
+                text: `${baseUrl}?code=${currentCode}`,
+                width: 140,
+                height: 140,
+                colorDark: "#2C1E16",
+                colorLight: "#FFFFFF",
+                correctLevel: QRCode.CorrectLevel.H
+            });
+
+            showScreen('screenSendCode');
+
+            createHostPeer(METERED_TURN_CONFIG);
+        }
+
         function shareAgain() {
             startHosting();
         }
 
         function startReceiving(code) {
-            retryCount = 0;
-            attemptConnection(code);
-        }
-
-        function attemptConnection(code) {
             showScreen('screenConnecting');
-            document.getElementById('connectingText').innerText = retryCount > 0 ? `Retrying (${retryCount}/3)...` : "Connecting...";
+            document.getElementById('connectingText').innerText = "Checking local Wi-Fi...";
 
             if (peer) peer.destroy();
-            peer = new Peer({
-                config: { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] },
-                debug: 1
-            });
+
+            // Try local connection first
+            peer = new Peer({ config: LOCAL_STUN_CONFIG });
 
             peer.on('open', () => {
-                const conn = peer.connect(PREFIX + code, { reliable: true });
-                
-                let fileMeta = null;
-                let receivedBytes = 0;
-                let chunks = [];
+                let conn = peer.connect(PREFIX + code, { reliable: true });
+                let isConnected = false;
 
-                let connected = false;
-
-                conn.on('open', () => {
-                    connected = true;
-                    if (retryTimer) clearTimeout(retryTimer);
-                    showScreen('screenTransferring');
-                    document.getElementById('transferLabel').innerText = "Downloading...";
+                setupConnectionListeners(conn, () => {
+                    isConnected = true;
+                    if (fallbackTimer) clearTimeout(fallbackTimer);
                 });
 
-                conn.on('data', (data) => {
-                    if (data && data.type === 'meta') {
-                        fileMeta = data;
-                        return;
-                    }
+                // 3.5s Fallback check
+                fallbackTimer = setTimeout(() => {
+                    if (!isConnected) {
+                        conn.close();
+                        peer.destroy();
 
-                    chunks.push(data);
-                    receivedBytes += data.byteLength;
+                        document.getElementById('connectingText').innerText = "Switching to internet relay...";
 
-                    if (fileMeta) {
-                        const progress = Math.min(100, (receivedBytes / fileMeta.filesize) * 100);
-                        document.getElementById('progressFill').style.width = `${progress}%`;
-                    }
-
-                    if (fileMeta && receivedBytes >= fileMeta.filesize) {
-                        const blob = new Blob(chunks, { type: fileMeta.filetype });
-                        const url = URL.createObjectURL(blob);
-                        
-                        const a = document.createElement('a');
-                        a.href = url;
-                        a.download = fileMeta.filename;
-                        document.body.appendChild(a);
-                        a.click();
-                        document.body.removeChild(a);
-                        URL.revokeObjectURL(url);
-
-                        showScreen('screenReceiveSuccess');
-                    }
-                });
-
-                // Auto-retry trigger if PeerJS signaling drops initially
-                retryTimer = setTimeout(() => {
-                    if (!connected) {
-                        if (retryCount < 3) {
-                            retryCount++;
-                            attemptConnection(code);
-                        } else {
-                            alert("Could not connect to sender. Check code or verify their tab is open.");
+                        // Sender-side limit guard
+                        if (fileToShare && fileToShare.size > TEN_MB) {
+                            alert("max file size over the internet: 10MB. Try again over the same wifi.");
                             resetToHome();
+                            return;
                         }
+
+                        // Connect over Internet relay
+                        peer = new Peer({ config: METERED_TURN_CONFIG });
+                        peer.on('open', () => {
+                            let internetConn = peer.connect(PREFIX + code, { reliable: true });
+                            
+                            setupConnectionListeners(internetConn, null, (remoteMeta) => {
+                                // Receiver-side limit guard
+                                if (remoteMeta && remoteMeta.filesize > TEN_MB) {
+                                    alert("max file size over the internet: 10MB. Try again over the same wifi.");
+                                    resetToHome();
+                                    return false;
+                                }
+                                return true;
+                            });
+                        });
                     }
                 }, 3500);
             });
+        }
 
-            peer.on('error', (err) => {
-                if (retryCount < 3) {
-                    retryCount++;
-                    setTimeout(() => attemptConnection(code), 1000);
-                } else {
-                    alert("Invalid code or sender unavailable.");
-                    resetToHome();
+        function setupConnectionListeners(conn, onOpenCallback, metaCheckCallback) {
+            let fileMeta = null;
+            let receivedBytes = 0;
+            let chunks = [];
+
+            conn.on('open', () => {
+                if (onOpenCallback) onOpenCallback();
+                showScreen('screenTransferring');
+                document.getElementById('transferLabel').innerText = "Downloading...";
+            });
+
+            conn.on('data', (data) => {
+                if (data && data.type === 'meta') {
+                    fileMeta = data;
+                    if (metaCheckCallback && !metaCheckCallback(fileMeta)) {
+                        conn.close();
+                        return;
+                    }
+                    return;
+                }
+
+                chunks.push(data);
+                receivedBytes += data.byteLength;
+
+                if (fileMeta) {
+                    const progress = Math.min(100, (receivedBytes / fileMeta.filesize) * 100);
+                    document.getElementById('progressFill').style.width = `${progress}%`;
+                }
+
+                if (fileMeta && receivedBytes >= fileMeta.filesize) {
+                    const blob = new Blob(chunks, { type: fileMeta.filetype });
+                    const url = URL.createObjectURL(blob);
+                    
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = fileMeta.filename;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(url);
+
+                    showScreen('screenReceiveSuccess');
                 }
             });
         }
 
         function resetToHome() {
-            if (retryTimer) clearTimeout(retryTimer);
+            if (fallbackTimer) clearTimeout(fallbackTimer);
             if (peer) peer.destroy();
             fileToShare = null;
             codeInput.value = '';
