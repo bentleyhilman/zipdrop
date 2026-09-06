@@ -3,202 +3,309 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ZipDrop | Fast P2P File Sharing</title>
+    <title>ZipDrop</title>
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
     <style>
         :root {
             --bg-color: #FAF9F6;
             --text-color: #2C1E16;
-            --accent-color: #4A3B32;
+            --accent-color: #8C7A6B;
+            --subtle-border: rgba(44, 30, 22, 0.12);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            user-select: none;
         }
 
         body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, sans-serif;
             background-color: var(--bg-color);
             color: var(--text-color);
-            margin: 0;
-            padding: 0;
+            height: 100vh;
+            width: 100vw;
+            overflow: hidden;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        /* Screen Management */
+        .screen {
+            position: absolute;
+            inset: 0;
             display: flex;
             flex-direction: column;
             align-items: center;
-            min-height: 100vh;
+            justify-content: space-between;
+            padding: 60px 24px;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.4s ease, transform 0.4s ease;
+            transform: scale(0.98);
         }
 
-        .container {
-            width: 100%;
-            max-width: 500px;
-            padding: 40px 20px;
-            text-align: center;
-            box-sizing: border-box;
+        .screen.active {
+            opacity: 1;
+            pointer-events: auto;
+            transform: scale(1);
         }
 
-        h1 {
-            font-size: 2.5rem;
-            margin-bottom: 5px;
+        /* Full Screen Drag Overlay Indicator */
+        #dragOverlay {
+            position: fixed;
+            inset: 0;
+            background-color: rgba(250, 249, 246, 0.92);
+            backdrop-filter: blur(8px);
+            z-index: 1000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.2rem;
+            letter-spacing: 2px;
+            color: var(--text-color);
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.2s ease;
+            border: 2px dashed var(--text-color);
+        }
+
+        #dragOverlay.visible {
+            opacity: 1;
+        }
+
+        /* Typography */
+        .brand-logo {
+            font-size: 2.2rem;
+            font-weight: 700;
             letter-spacing: -1px;
+            margin-top: 20px;
         }
 
-        p {
+        .status-heading {
+            font-size: 1.1rem;
+            font-weight: 500;
             color: var(--accent-color);
-            margin-bottom: 30px;
+            letter-spacing: 0.5px;
         }
 
-        .receive-section {
-            margin-bottom: 30px;
-            padding-bottom: 30px;
-            border-bottom: 1px solid rgba(74, 59, 50, 0.2);
+        .big-code {
+            font-size: 4.5rem;
+            font-weight: 800;
+            letter-spacing: 8px;
+            line-height: 1;
+            margin: 16px 0 24px 0;
+        }
+
+        /* Inputs & Buttons */
+        .code-input-wrap {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 16px;
         }
 
         input[type="text"] {
-            font-size: 1.2rem;
-            padding: 12px;
-            width: 120px;
+            font-size: 2rem;
+            font-weight: 600;
+            padding: 16px 24px;
+            width: 180px;
             text-align: center;
             text-transform: uppercase;
-            border: 2px solid var(--text-color);
+            border: none;
+            border-bottom: 2px solid var(--text-color);
             background: transparent;
             color: var(--text-color);
-            border-radius: 8px;
             outline: none;
-            letter-spacing: 2px;
+            letter-spacing: 6px;
+            transition: border-color 0.2s;
         }
 
-        button {
-            font-size: 1.1rem;
-            padding: 13px 24px;
+        input[type="text"]::placeholder {
+            color: var(--subtle-border);
+            letter-spacing: 6px;
+        }
+
+        .btn {
+            font-size: 0.95rem;
+            font-weight: 600;
+            padding: 16px 36px;
             background-color: var(--text-color);
             color: var(--bg-color);
             border: none;
-            border-radius: 8px;
+            border-radius: 40px;
             cursor: pointer;
-            margin-left: 10px;
-            transition: opacity 0.2s;
+            letter-spacing: 0.5px;
+            transition: transform 0.15s ease, opacity 0.2s ease;
+            outline: none;
         }
 
-        button:hover {
-            opacity: 0.8;
+        .btn:active {
+            transform: scale(0.96);
         }
 
-        .drop-zone {
-            border: 2px dashed var(--text-color);
-            border-radius: 12px;
-            padding: 50px 20px;
-            cursor: pointer;
-            transition: background-color 0.2s;
+        .btn-secondary {
+            background-color: transparent;
+            color: var(--text-color);
+            border: 1px solid var(--subtle-border);
         }
 
-        .drop-zone:hover, .drop-zone.dragover {
-            background-color: rgba(74, 59, 50, 0.05);
-        }
-
-        #fileInput {
-            display: none;
-        }
-
-        .status {
-            margin-top: 25px;
-            font-weight: 500;
-            font-size: 1.1rem;
-            min-height: 24px;
-        }
-
-        .code-display {
-            font-size: 3rem;
-            font-weight: bold;
-            margin: 10px 0 5px 0;
-            letter-spacing: 4px;
-        }
-
-        #qrcode {
-            margin: 20px auto 10px auto;
+        .btn-group {
             display: flex;
+            gap: 12px;
+        }
+
+        /* Shared Card Component */
+        .center-card {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
             justify-content: center;
-            padding: 12px;
+            width: 100%;
+            max-width: 360px;
+            margin: auto;
+        }
+
+        /* QR Frame */
+        #qrcode {
+            padding: 16px;
             background-color: #FFFFFF;
-            border-radius: 8px;
-            width: fit-content;
-            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.05);
+            border-radius: 16px;
+            box-shadow: 0 10px 30px rgba(44, 30, 22, 0.05);
+            margin-bottom: 24px;
         }
 
         #qrcode img {
             display: block;
         }
 
-        .progress-bar-container {
+        /* Progress Bar */
+        .progress-track {
             width: 100%;
-            background-color: rgba(74, 59, 50, 0.1);
-            border-radius: 8px;
-            height: 12px;
-            margin-top: 15px;
+            max-width: 280px;
+            height: 4px;
+            background-color: var(--subtle-border);
+            border-radius: 2px;
             overflow: hidden;
-            display: none;
+            margin-top: 24px;
         }
 
-        .progress-bar {
+        .progress-fill {
             height: 100%;
-            background-color: var(--text-color);
             width: 0%;
-            transition: width 0.1s ease;
+            background-color: var(--text-color);
+            transition: width 0.15s ease-out;
+        }
+
+        /* Pulse Animation for Connecting */
+        .pulse {
+            animation: pulse-animation 1.8s infinite ease-in-out;
+        }
+
+        @keyframes pulse-animation {
+            0% { opacity: 0.4; }
+            50% { opacity: 1; }
+            100% { opacity: 0.4; }
+        }
+
+        #fileInput {
+            display: none;
         }
     </style>
 </head>
 <body>
 
-    <div class="container">
-        <h1>ZipDrop</h1>
-        <p>High-speed peer-to-peer file transfer.</p>
+    <div id="dragOverlay">DROP FILE TO SEND</div>
+    <input type="file" id="fileInput">
 
-        <div class="receive-section">
-            <h3>Download a File</h3>
-            <input type="text" id="codeInput" placeholder="XYZ" maxlength="3">
-            <button onclick="receiveFile()">Drop It</button>
-        </div>
-
-        <div class="send-section" id="sendSection">
-            <h3>Send a File</h3>
-            <div class="drop-zone" id="dropZone" onclick="document.getElementById('fileInput').click()">
-                Click here or drag and drop a file to upload.
+    <!-- HOME SCREEN -->
+    <div id="screenHome" class="screen active">
+        <div class="brand-logo">ZipDrop</div>
+        
+        <div class="center-card">
+            <div class="code-input-wrap">
+                <input type="text" id="codeInput" placeholder="···" maxlength="3" autocomplete="off" spellcheck="false">
             </div>
-            <input type="file" id="fileInput">
         </div>
 
-        <div id="statusText" class="status"></div>
-        <div class="progress-bar-container" id="progressContainer">
-            <div class="progress-bar" id="progressBar"></div>
+        <button class="btn" onclick="document.getElementById('fileInput').click()">Upload File</button>
+    </div>
+
+    <!-- SENDER: QR & CODE SCREEN -->
+    <div id="screenSendCode" class="screen">
+        <div></div>
+        <div class="center-card">
+            <div id="qrcode"></div>
+            <div class="big-code" id="displayCode">---</div>
+            <div class="status-heading pulse">Waiting for receiver...</div>
         </div>
-        <div id="codeDisplay" class="code-display"></div>
-        <div id="qrcode"></div>
+        <button class="btn btn-secondary" onclick="resetToHome()">Cancel</button>
+    </div>
+
+    <!-- SHARED: CONNECTING SCREEN -->
+    <div id="screenConnecting" class="screen">
+        <div></div>
+        <div class="center-card">
+            <div class="status-heading pulse">Connecting...</div>
+        </div>
+        <div></div>
+    </div>
+
+    <!-- SHARED: TRANSFERRING SCREEN -->
+    <div id="screenTransferring" class="screen">
+        <div></div>
+        <div class="center-card">
+            <div class="status-heading" id="transferLabel">Transferring...</div>
+            <div class="progress-track">
+                <div class="progress-fill" id="progressFill"></div>
+            </div>
+        </div>
+        <div></div>
+    </div>
+
+    <!-- SENDER: SUCCESS SCREEN -->
+    <div id="screenSendSuccess" class="screen">
+        <div></div>
+        <div class="center-card">
+            <div class="status-heading">Sent</div>
+        </div>
+        <div class="btn-group">
+            <button class="btn btn-secondary" onclick="shareAgain()">Share Again</button>
+            <button class="btn" onclick="resetToHome()">Home</button>
+        </div>
+    </div>
+
+    <!-- RECEIVER: SUCCESS SCREEN -->
+    <div id="screenReceiveSuccess" class="screen">
+        <div></div>
+        <div class="center-card">
+            <div class="status-heading">Downloaded</div>
+        </div>
+        <button class="btn" onclick="resetToHome()">Home</button>
     </div>
 
     <script>
-        const PREFIX = 'zipdrop-v2-';
-        const CHUNK_SIZE = 64 * 1024; // 64KB per chunk for optimal WebRTC throughput
+        const PREFIX = 'zipdrop-v3-';
+        const CHUNK_SIZE = 64 * 1024;
         
         let peer = null;
+        let activeConn = null;
         let fileToShare = null;
+        let currentCode = '';
 
-        const dropZone = document.getElementById('dropZone');
+        const dragOverlay = document.getElementById('dragOverlay');
         const fileInput = document.getElementById('fileInput');
         const codeInput = document.getElementById('codeInput');
-        const statusText = document.getElementById('statusText');
-        const codeDisplay = document.getElementById('codeDisplay');
         const qrContainer = document.getElementById('qrcode');
-        const progressContainer = document.getElementById('progressContainer');
-        const progressBar = document.getElementById('progressBar');
 
-        function setStatus(msg) {
-            statusText.innerText = msg;
-        }
-
-        function updateProgress(percent) {
-            progressContainer.style.display = 'block';
-            progressBar.style.width = `${percent}%`;
-        }
-
-        function resetProgress() {
-            progressContainer.style.display = 'none';
-            progressBar.style.width = '0%';
+        // Navigation Engine
+        function showScreen(screenId) {
+            document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+            document.getElementById(screenId).classList.add('active');
         }
 
         function generateCode() {
@@ -210,19 +317,21 @@
             return result;
         }
 
-        // Drag and drop setup
-        dropZone.addEventListener('dragover', (e) => {
+        // Global Drag & Drop Engine (Whole Screen)
+        window.addEventListener('dragover', (e) => {
             e.preventDefault();
-            dropZone.classList.add('dragover');
+            dragOverlay.classList.add('visible');
         });
 
-        dropZone.addEventListener('dragleave', () => {
-            dropZone.classList.remove('dragover');
+        window.addEventListener('dragleave', (e) => {
+            if (e.clientX === 0 && e.clientY === 0) {
+                dragOverlay.classList.remove('visible');
+            }
         });
 
-        dropZone.addEventListener('drop', (e) => {
+        window.addEventListener('drop', (e) => {
             e.preventDefault();
-            dropZone.classList.remove('dragover');
+            dragOverlay.classList.remove('visible');
             if (e.dataTransfer.files.length > 0) {
                 handleFileSelect(e.dataTransfer.files[0]);
             }
@@ -234,53 +343,52 @@
             }
         });
 
+        // Code Entry Auto-Submit
+        codeInput.addEventListener('input', (e) => {
+            const val = e.target.value.toUpperCase();
+            e.target.value = val;
+            if (val.length === 3) {
+                startReceiving(val);
+            }
+        });
+
+        // Sender Logic
         function handleFileSelect(file) {
             fileToShare = file;
             startHosting();
         }
 
-        // Host the file and send in streamed binary chunks
         function startHosting() {
-            setStatus("Generating code & QR...");
-            const code = generateCode();
-            
-            if (peer) peer.destroy();
+            currentCode = generateCode();
+            document.getElementById('displayCode').innerText = currentCode;
 
-            // Configured with Google's public STUN servers for direct P2P hole punching
-            peer = new Peer(PREFIX + code, {
-                config: {
-                    iceServers: [
-                        { urls: 'stun:stun.l.google.com:19302' },
-                        { urls: 'stun:stun1.l.google.com:19302' }
-                    ]
-                }
+            // Generate QR Code
+            const baseUrl = window.location.href.split('?')[0];
+            qrContainer.innerHTML = "";
+            new QRCode(qrContainer, {
+                text: `${baseUrl}?code=${currentCode}`,
+                width: 140,
+                height: 140,
+                colorDark: "#2C1E16",
+                colorLight: "#FFFFFF",
+                correctLevel: QRCode.CorrectLevel.H
             });
 
-            peer.on('open', () => {
-                setStatus("Ready! Scan QR or give code to receiver. Keep tab open.");
-                codeDisplay.innerText = code;
-                dropZone.style.display = "none";
+            showScreen('screenSendCode');
 
-                const baseUrl = window.location.href.split('?')[0];
-                const shareableUrl = `${baseUrl}?code=${code}`;
-
-                qrContainer.innerHTML = "";
-                new QRCode(qrContainer, {
-                    text: shareableUrl,
-                    width: 160,
-                    height: 160,
-                    colorDark: "#2C1E16",
-                    colorLight: "#FFFFFF",
-                    correctLevel: QRCode.CorrectLevel.H
-                });
+            if (peer) peer.destroy();
+            peer = new Peer(PREFIX + currentCode, {
+                config: { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] }
             });
 
             peer.on('connection', (conn) => {
-                setStatus("Receiver connected! Streaming file...");
-                resetProgress();
-                
+                activeConn = conn;
+                showScreen('screenConnecting');
+
                 conn.on('open', async () => {
-                    // Send metadata first
+                    showScreen('screenTransferring');
+                    document.getElementById('transferLabel').innerText = "Sending...";
+                    
                     conn.send({
                         type: 'meta',
                         filename: fileToShare.name,
@@ -288,12 +396,10 @@
                         filesize: fileToShare.size
                     });
 
-                    // Stream raw array buffer chunks
                     let offset = 0;
                     const totalSize = fileToShare.size;
 
                     while (offset < totalSize) {
-                        // Backpressure control: wait if RTC buffer is backed up
                         if (conn.dataChannel && conn.dataChannel.bufferedAmount > 8 * 1024 * 1024) {
                             await new Promise(r => setTimeout(r, 50));
                             continue;
@@ -304,40 +410,26 @@
                         conn.send(buffer);
 
                         offset += CHUNK_SIZE;
-                        const progress = Math.min(100, Math.round((offset / totalSize) * 100));
-                        updateProgress(progress);
+                        const progress = Math.min(100, (offset / totalSize) * 100);
+                        document.getElementById('progressFill').style.width = `${progress}%`;
                     }
 
-                    setStatus("File fully sent!");
+                    showScreen('screenSendSuccess');
                 });
-            });
-
-            peer.on('error', (err) => {
-                setStatus("Connection error occurred.");
-                console.error(err);
             });
         }
 
-        // Receive file logic with chunk reassembly
-        function receiveFile(targetCode = null) {
-            const code = (targetCode || codeInput.value).toUpperCase();
-            if (code.length !== 3) {
-                setStatus("Please enter a valid 3-character code.");
-                return;
-            }
+        function shareAgain() {
+            startHosting();
+        }
 
-            codeInput.value = code;
-            setStatus("Connecting to sender...");
-            resetProgress();
-            
+        // Receiver Logic
+        function startReceiving(code) {
+            showScreen('screenConnecting');
+
             if (peer) peer.destroy();
             peer = new Peer({
-                config: {
-                    iceServers: [
-                        { urls: 'stun:stun.l.google.com:19302' },
-                        { urls: 'stun:stun1.l.google.com:19302' }
-                    ]
-                }
+                config: { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] }
             });
 
             peer.on('open', () => {
@@ -348,29 +440,25 @@
                 let chunks = [];
 
                 conn.on('open', () => {
-                    setStatus("Connected! Waiting for transfer to start...");
+                    showScreen('screenTransferring');
+                    document.getElementById('transferLabel').innerText = "Downloading...";
                 });
 
                 conn.on('data', (data) => {
-                    // Step 1: Read Metadata
                     if (data && data.type === 'meta') {
                         fileMeta = data;
-                        setStatus(`Receiving: ${fileMeta.filename}`);
                         return;
                     }
 
-                    // Step 2: Accumulate Chunks
                     chunks.push(data);
                     receivedBytes += data.byteLength;
 
                     if (fileMeta) {
-                        const progress = Math.min(100, Math.round((receivedBytes / fileMeta.filesize) * 100));
-                        updateProgress(progress);
+                        const progress = Math.min(100, (receivedBytes / fileMeta.filesize) * 100);
+                        document.getElementById('progressFill').style.width = `${progress}%`;
                     }
 
-                    // Step 3: Trigger Download once complete
                     if (fileMeta && receivedBytes >= fileMeta.filesize) {
-                        setStatus("Assembling file...");
                         const blob = new Blob(chunks, { type: fileMeta.filetype });
                         const url = URL.createObjectURL(blob);
                         
@@ -382,22 +470,32 @@
                         document.body.removeChild(a);
                         URL.revokeObjectURL(url);
 
-                        setStatus("Download complete!");
+                        showScreen('screenReceiveSuccess');
                     }
                 });
             });
 
-            peer.on('error', (err) => {
-                setStatus("Could not find sender. Make sure their tab is open!");
+            peer.on('error', () => {
+                alert("Connection failed. Check code or sender tab.");
+                resetToHome();
             });
         }
 
+        function resetToHome() {
+            if (peer) peer.destroy();
+            fileToShare = null;
+            activeConn = null;
+            codeInput.value = '';
+            document.getElementById('progressFill').style.width = '0%';
+            showScreen('screenHome');
+        }
+
+        // Auto-connect from URL Scan
         window.addEventListener('DOMContentLoaded', () => {
             const urlParams = new URLSearchParams(window.location.search);
             const codeFromUrl = urlParams.get('code');
-            
             if (codeFromUrl && codeFromUrl.length === 3) {
-                receiveFile(codeFromUrl);
+                startReceiving(codeFromUrl.toUpperCase());
             }
         });
     </script>
