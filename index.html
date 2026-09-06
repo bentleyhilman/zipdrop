@@ -269,28 +269,25 @@
     </div>
 
     <script>
-        const PREFIX = 'zipdrop-v9-';
+        const PREFIX = 'zipdrop-v10-';
         const CHUNK_SIZE = 64 * 1024;
-        const TEN_MB = 10 * 1024 * 1024; // 10MB in Bytes
+        const TEN_MB = 10 * 1024 * 1024; // 10MB Limit
 
-        // Free OpenRelay TURN Configuration (20 GB Monthly Bandwidth)
-        const METERED_TURN_CONFIG = {
-            iceServers: [
-                { urls: 'stun:openrelay.metered.ca:80' },
-                { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
-                { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
-                { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' }
-            ]
-        };
-
-        const LOCAL_STUN_CONFIG = {
-            iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+        // Unified OpenRelay Configuration
+        const PEER_CONFIG = {
+            config: {
+                iceServers: [
+                    { urls: 'stun:openrelay.metered.ca:80' },
+                    { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
+                    { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
+                    { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' }
+                ]
+            }
         };
 
         let peer = null;
         let fileToShare = null;
         let currentCode = '';
-        let fallbackTimer = null;
 
         const dragOverlay = document.getElementById('dragOverlay');
         const fileInput = document.getElementById('fileInput');
@@ -341,18 +338,58 @@
             startHosting();
         }
 
-        function createHostPeer(config) {
+        function startHosting() {
+            currentCode = generateCode();
+            document.getElementById('displayCode').innerText = currentCode;
+
+            const baseUrl = window.location.href.split('?')[0];
+            qrContainer.innerHTML = "";
+            new QRCode(qrContainer, {
+                text: `${baseUrl}?code=${currentCode}`,
+                width: 140,
+                height: 140,
+                colorDark: "#2C1E16",
+                colorLight: "#FFFFFF",
+                correctLevel: QRCode.CorrectLevel.H
+            });
+
+            showScreen('screenSendCode');
+
             if (peer) peer.destroy();
-            peer = new Peer(PREFIX + currentCode, { config: config });
+            peer = new Peer(PREFIX + currentCode, PEER_CONFIG);
 
             peer.on('connection', (conn) => {
                 showScreen('screenConnecting');
                 document.getElementById('connectingText').innerText = "Connecting...";
 
                 conn.on('open', async () => {
+                    // Inspect connection type (Relaying vs Local P2P)
+                    let isRelayed = false;
+                    try {
+                        const pc = conn.peerConnection;
+                        const stats = await pc.getStats();
+                        stats.forEach(report => {
+                            if (report.type === 'candidate-pair' && report.state === 'succeeded') {
+                                const localCand = stats.get(report.localCandidateId);
+                                const remoteCand = stats.get(report.remoteCandidateId);
+                                if ((localCand && localCand.candidateType === 'relay') || (remoteCand && remoteCand.candidateType === 'relay')) {
+                                    isRelayed = true;
+                                }
+                            }
+                        });
+                    } catch (e) { }
+
+                    // Enforce 10MB limit if transferring over Internet Relay
+                    if (isRelayed && fileToShare.size > TEN_MB) {
+                        alert("max file size over the internet: 10MB. Try again over the same wifi.");
+                        conn.close();
+                        resetToHome();
+                        return;
+                    }
+
                     showScreen('screenTransferring');
                     document.getElementById('transferLabel').innerText = "Sending...";
-                    
+
                     conn.send({
                         type: 'meta',
                         filename: fileToShare.name,
@@ -383,131 +420,84 @@
             });
         }
 
-        function startHosting() {
-            currentCode = generateCode();
-            document.getElementById('displayCode').innerText = currentCode;
-
-            const baseUrl = window.location.href.split('?')[0];
-            qrContainer.innerHTML = "";
-            new QRCode(qrContainer, {
-                text: `${baseUrl}?code=${currentCode}`,
-                width: 140,
-                height: 140,
-                colorDark: "#2C1E16",
-                colorLight: "#FFFFFF",
-                correctLevel: QRCode.CorrectLevel.H
-            });
-
-            showScreen('screenSendCode');
-
-            createHostPeer(METERED_TURN_CONFIG);
-        }
-
         function shareAgain() {
             startHosting();
         }
 
         function startReceiving(code) {
             showScreen('screenConnecting');
-            document.getElementById('connectingText').innerText = "Checking local Wi-Fi...";
+            document.getElementById('connectingText').innerText = "Connecting...";
 
             if (peer) peer.destroy();
-
-            // Try local connection first
-            peer = new Peer({ config: LOCAL_STUN_CONFIG });
+            peer = new Peer(PEER_CONFIG);
 
             peer.on('open', () => {
                 let conn = peer.connect(PREFIX + code, { reliable: true });
-                let isConnected = false;
+                let fileMeta = null;
+                let receivedBytes = 0;
+                let chunks = [];
 
-                setupConnectionListeners(conn, () => {
-                    isConnected = true;
-                    if (fallbackTimer) clearTimeout(fallbackTimer);
+                conn.on('open', () => {
+                    showScreen('screenTransferring');
+                    document.getElementById('transferLabel').innerText = "Downloading...";
                 });
 
-                // 3.5s Fallback check
-                fallbackTimer = setTimeout(() => {
-                    if (!isConnected) {
-                        conn.close();
-                        peer.destroy();
+                conn.on('data', async (data) => {
+                    if (data && data.type === 'meta') {
+                        fileMeta = data;
 
-                        document.getElementById('connectingText').innerText = "Switching to internet relay...";
+                        // Check candidate stats on receiver side
+                        let isRelayed = false;
+                        try {
+                            const pc = conn.peerConnection;
+                            const stats = await pc.getStats();
+                            stats.forEach(report => {
+                                if (report.type === 'candidate-pair' && report.state === 'succeeded') {
+                                    const localCand = stats.get(report.localCandidateId);
+                                    const remoteCand = stats.get(report.remoteCandidateId);
+                                    if ((localCand && localCand.candidateType === 'relay') || (remoteCand && remoteCand.candidateType === 'relay')) {
+                                        isRelayed = true;
+                                    }
+                                }
+                            });
+                        } catch (e) { }
 
-                        // Sender-side limit guard
-                        if (fileToShare && fileToShare.size > TEN_MB) {
+                        if (isRelayed && fileMeta.filesize > TEN_MB) {
                             alert("max file size over the internet: 10MB. Try again over the same wifi.");
+                            conn.close();
                             resetToHome();
                             return;
                         }
-
-                        // Connect over Internet relay
-                        peer = new Peer({ config: METERED_TURN_CONFIG });
-                        peer.on('open', () => {
-                            let internetConn = peer.connect(PREFIX + code, { reliable: true });
-                            
-                            setupConnectionListeners(internetConn, null, (remoteMeta) => {
-                                // Receiver-side limit guard
-                                if (remoteMeta && remoteMeta.filesize > TEN_MB) {
-                                    alert("max file size over the internet: 10MB. Try again over the same wifi.");
-                                    resetToHome();
-                                    return false;
-                                }
-                                return true;
-                            });
-                        });
-                    }
-                }, 3500);
-            });
-        }
-
-        function setupConnectionListeners(conn, onOpenCallback, metaCheckCallback) {
-            let fileMeta = null;
-            let receivedBytes = 0;
-            let chunks = [];
-
-            conn.on('open', () => {
-                if (onOpenCallback) onOpenCallback();
-                showScreen('screenTransferring');
-                document.getElementById('transferLabel').innerText = "Downloading...";
-            });
-
-            conn.on('data', (data) => {
-                if (data && data.type === 'meta') {
-                    fileMeta = data;
-                    if (metaCheckCallback && !metaCheckCallback(fileMeta)) {
-                        conn.close();
                         return;
                     }
-                    return;
-                }
 
-                chunks.push(data);
-                receivedBytes += data.byteLength;
+                    chunks.push(data);
+                    receivedBytes += data.byteLength;
 
-                if (fileMeta) {
-                    const progress = Math.min(100, (receivedBytes / fileMeta.filesize) * 100);
-                    document.getElementById('progressFill').style.width = `${progress}%`;
-                }
+                    if (fileMeta) {
+                        const progress = Math.min(100, (receivedBytes / fileMeta.filesize) * 100);
+                        document.getElementById('progressFill').style.width = `${progress}%`;
+                    }
 
-                if (fileMeta && receivedBytes >= fileMeta.filesize) {
-                    const blob = new Blob(chunks, { type: fileMeta.filetype });
-                    const url = URL.createObjectURL(blob);
-                    
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = fileMeta.filename;
-                    document.body.appendChild(a);
-                    a.click();
-                    document.body.removeChild(a);
-                    URL.revokeObjectURL(url);
+                    if (fileMeta && receivedBytes >= fileMeta.filesize) {
+                        const blob = new Blob(chunks, { type: fileMeta.filetype });
+                        const url = URL.createObjectURL(blob);
+                        
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = fileMeta.filename;
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                        URL.revokeObjectURL(url);
 
-                    showScreen('screenReceiveSuccess');
-                }
+                        showScreen('screenReceiveSuccess');
+                    }
+                });
             });
         }
 
         function resetToHome() {
-            if (fallbackTimer) clearTimeout(fallbackTimer);
             if (peer) peer.destroy();
             fileToShare = null;
             codeInput.value = '';
