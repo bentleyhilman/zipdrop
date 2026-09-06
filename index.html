@@ -272,7 +272,6 @@
     </div>
 
     <script>
-        // Your real-zipdrop Firebase Configuration
         const firebaseConfig = {
             apiKey: "AIzaSyDK1mWgcA0Y0QsEiIOwFYF4aD_vnzF9ocI",
             authDomain: "real-zipdrop.firebaseapp.com",
@@ -284,17 +283,20 @@
             measurementId: "G-84C0CKSVMS"
         };
 
-        firebase.initializeApp(firebaseConfig);
+        if (!firebase.apps.length) {
+            firebase.initializeApp(firebaseConfig);
+        }
 
-        const PREFIX = 'zipdrop-v11-';
+        const PREFIX = 'zipdrop-v12-';
         const CHUNK_SIZE = 64 * 1024;
-        const TEN_MB = 10 * 1024 * 1024; // 10MB Limit
+        const TEN_MB = 10 * 1024 * 1024;
 
         let peer = null;
         let fileToShare = null;
         let currentCode = '';
         let connectedP2P = false;
         let dbRef = null;
+        let connectionTimeout = null;
 
         const dragOverlay = document.getElementById('dragOverlay');
         const fileInput = document.getElementById('fileInput');
@@ -363,12 +365,13 @@
 
             showScreen('screenSendCode');
 
-            // 1. Set up Firebase Listener for Internet Fallback Requests
+            // Set up Firebase node
             dbRef = firebase.database().ref(`transfers/${currentCode}`);
+            dbRef.set({ status: 'ready' });
+
             dbRef.on('value', async (snapshot) => {
                 const data = snapshot.val();
                 if (data && data.status === 'requested' && !connectedP2P) {
-                    // Check file size limit for Internet Transfer
                     if (fileToShare.size > TEN_MB) {
                         alert("max file size over the internet: 10MB. Try again over the same wifi.");
                         dbRef.update({ status: 'cancelled' });
@@ -381,12 +384,11 @@
 
                     const reader = new FileReader();
                     reader.onload = async (e) => {
-                        const base64Data = e.target.result;
                         await dbRef.update({
                             status: 'transferring',
                             filename: fileToShare.name,
-                            filetype: fileToShare.type,
-                            payload: base64Data
+                            filetype: fileToShare.type || 'application/octet-stream',
+                            payload: e.target.result
                         });
                         document.getElementById('progressFill').style.width = '100%';
                         showScreen('screenSendSuccess');
@@ -395,14 +397,14 @@
                 }
             });
 
-            // 2. Set up PeerJS for Direct Wi-Fi Connection
+            // PeerJS for Local Wi-Fi
             if (peer) peer.destroy();
             peer = new Peer(PREFIX + currentCode);
 
             peer.on('connection', (conn) => {
                 conn.on('open', async () => {
                     connectedP2P = true;
-                    if (dbRef) dbRef.off(); // Disable internet relay since Wi-Fi worked
+                    if (dbRef) dbRef.off();
 
                     showScreen('screenTransferring');
                     document.getElementById('transferLabel').innerText = "Sending (Local Wi-Fi)...";
@@ -444,10 +446,8 @@
         function startReceiving(code) {
             showScreen('screenConnecting');
             document.getElementById('connectingText').innerText = "Checking local Wi-Fi...";
-
             connectedP2P = false;
 
-            // 1. Try Direct Wi-Fi Connection First
             if (peer) peer.destroy();
             peer = new Peer();
 
@@ -459,6 +459,7 @@
 
                 conn.on('open', () => {
                     connectedP2P = true;
+                    if (connectionTimeout) clearTimeout(connectionTimeout);
                     showScreen('screenTransferring');
                     document.getElementById('transferLabel').innerText = "Downloading (Local Wi-Fi)...";
                 });
@@ -474,13 +475,15 @@
                 });
             });
 
-            // 2. Fallback to Firebase Internet Relay after 3 seconds if Wi-Fi doesn't connect
-            setTimeout(() => {
+            // Fallback after 3 seconds
+            connectionTimeout = setTimeout(() => {
                 if (!connectedP2P) {
                     document.getElementById('connectingText').innerText = "Switching to internet relay...";
 
                     dbRef = firebase.database().ref(`transfers/${code}`);
-                    dbRef.set({ status: 'requested' });
+                    
+                    // Request file transfer
+                    dbRef.update({ status: 'requested' });
 
                     dbRef.on('value', (snapshot) => {
                         const data = snapshot.val();
@@ -499,11 +502,23 @@
                             fetch(data.payload)
                                 .then(res => res.blob())
                                 .then(blob => {
-                                    triggerDownload(blob, data.filename);
+                                    triggerDownload(blob, data.filename || 'downloaded_file');
                                     dbRef.remove();
+                                })
+                                .catch(() => {
+                                    alert("Transfer failed over internet. Please try again.");
+                                    resetToHome();
                                 });
                         }
                     });
+
+                    // 15s Safety Reset if host doesn't respond
+                    setTimeout(() => {
+                        if (document.getElementById('screenConnecting').classList.contains('active')) {
+                            alert("Sender not found or connection timed out.");
+                            resetToHome();
+                        }
+                    }, 15000);
                 }
             }, 3000);
         }
@@ -521,6 +536,7 @@
         }
 
         function resetToHome() {
+            if (connectionTimeout) clearTimeout(connectionTimeout);
             if (peer) peer.destroy();
             if (dbRef) dbRef.off();
             fileToShare = null;
