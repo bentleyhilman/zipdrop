@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ZipDrop | Simple File Sharing</title>
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
     <style>
         :root {
             --bg-color: #FAF9F6; /* Cream */
@@ -40,13 +41,13 @@
 
         p {
             color: var(--accent-color);
-            margin-bottom: 40px;
+            margin-bottom: 30px;
         }
 
         /* Receive Section */
         .receive-section {
-            margin-bottom: 40px;
-            padding-bottom: 40px;
+            margin-bottom: 30px;
+            padding-bottom: 30px;
             border-bottom: 1px solid rgba(74, 59, 50, 0.2);
         }
 
@@ -84,7 +85,7 @@
         .drop-zone {
             border: 2px dashed var(--text-color);
             border-radius: 12px;
-            padding: 60px 20px;
+            padding: 50px 20px;
             cursor: pointer;
             transition: background-color 0.2s;
         }
@@ -107,8 +108,24 @@
         .code-display {
             font-size: 3rem;
             font-weight: bold;
-            margin: 10px 0;
+            margin: 10px 0 5px 0;
             letter-spacing: 4px;
+        }
+
+        /* QR Code Container */
+        #qrcode {
+            margin: 20px auto 10px auto;
+            display: flex;
+            justify-content: center;
+            padding: 12px;
+            background-color: #FFFFFF;
+            border-radius: 8px;
+            width: fit-content;
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.05);
+        }
+
+        #qrcode img {
+            display: block;
         }
     </style>
 </head>
@@ -124,7 +141,7 @@
             <button onclick="receiveFile()">Drop It</button>
         </div>
 
-        <div class="send-section">
+        <div class="send-section" id="sendSection">
             <h3>Send a File</h3>
             <div class="drop-zone" id="dropZone" onclick="document.getElementById('fileInput').click()">
                 Click here or drag and drop a file to upload.
@@ -134,10 +151,11 @@
 
         <div id="statusText" class="status"></div>
         <div id="codeDisplay" class="code-display"></div>
+        <div id="qrcode"></div>
     </div>
 
     <script>
-        const PREFIX = 'zipdrop-v1-'; // Prevents global PeerJS collisions
+        const PREFIX = 'zipdrop-v1-';
         let peer = null;
         let fileToShare = null;
 
@@ -146,13 +164,12 @@
         const codeInput = document.getElementById('codeInput');
         const statusText = document.getElementById('statusText');
         const codeDisplay = document.getElementById('codeDisplay');
+        const qrContainer = document.getElementById('qrcode');
 
-        // Helper: Update UI text
         function setStatus(msg) {
             statusText.innerText = msg;
         }
 
-        // Helper: Generate 3-digit alphanumeric code
         function generateCode() {
             const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
             let result = '';
@@ -162,7 +179,7 @@
             return result;
         }
 
-        // Drag and Drop Event Listeners
+        // Drag and drop setup
         dropZone.addEventListener('dragover', (e) => {
             e.preventDefault();
             dropZone.classList.add('dragover');
@@ -186,33 +203,45 @@
             }
         });
 
-        // Step 1: User selects a file to SEND
         function handleFileSelect(file) {
             fileToShare = file;
             startHosting();
         }
 
-        // Step 2: Initialize PeerJS and wait for connection
+        // Host the file and render the QR code
         function startHosting() {
-            setStatus("Generating secure code...");
+            setStatus("Generating code & QR...");
             const code = generateCode();
             
-            // Clean up old connection if exists
             if (peer) peer.destroy();
 
             peer = new Peer(PREFIX + code);
 
             peer.on('open', () => {
-                setStatus("Ready! Give this code to the receiver. Keep this tab open.");
+                setStatus("Ready! Scan QR or give code to receiver. Keep tab open.");
                 codeDisplay.innerText = code;
-                dropZone.style.display = "none"; // Hide drop zone once hosting
+                dropZone.style.display = "none";
+
+                // Generate full shareable URL
+                const baseUrl = window.location.href.split('?')[0];
+                const shareableUrl = `${baseUrl}?code=${code}`;
+
+                // Clear previous QR and generate new one
+                qrContainer.innerHTML = "";
+                new QRCode(qrContainer, {
+                    text: shareableUrl,
+                    width: 160,
+                    height: 160,
+                    colorDark: "#2C1E16",
+                    colorLight: "#FFFFFF",
+                    correctLevel: QRCode.CorrectLevel.H
+                });
             });
 
             peer.on('connection', (conn) => {
-                setStatus("Receiver connecting...");
+                setStatus("Receiver connected! Sending file...");
                 
                 conn.on('open', () => {
-                    setStatus("Sending: " + fileToShare.name + "...");
                     conn.send({
                         file: fileToShare,
                         filename: fileToShare.name,
@@ -220,7 +249,6 @@
                     });
                 });
 
-                // Optional: Listen for success message back from receiver
                 conn.on('data', (data) => {
                     if (data === 'SUCCESS') {
                         setStatus("Transfer complete!");
@@ -234,30 +262,28 @@
             });
         }
 
-        // Step 3: User enters a code to RECEIVE
-        function receiveFile() {
-            const code = codeInput.value.toUpperCase();
+        // Receive file logic
+        function receiveFile(targetCode = null) {
+            const code = (targetCode || codeInput.value).toUpperCase();
             if (code.length !== 3) {
                 setStatus("Please enter a valid 3-character code.");
                 return;
             }
 
-            setStatus("Looking for sender...");
+            codeInput.value = code;
+            setStatus("Connecting to sender...");
             
             if (peer) peer.destroy();
-            peer = new Peer(); // Create random peer for the receiver
+            peer = new Peer();
 
             peer.on('open', () => {
                 const conn = peer.connect(PREFIX + code);
                 
                 conn.on('open', () => {
-                    setStatus("Connected! Awaiting file...");
+                    setStatus("Connected! Downloading file...");
                 });
 
                 conn.on('data', (data) => {
-                    setStatus("Receiving file...");
-                    
-                    // Convert received data back to a file and trigger download
                     const blob = new Blob([data.file], { type: data.filetype });
                     const url = URL.createObjectURL(blob);
                     
@@ -270,14 +296,24 @@
                     URL.revokeObjectURL(url);
 
                     setStatus("Download complete!");
-                    conn.send('SUCCESS'); // Tell sender we got it
+                    conn.send('SUCCESS');
                 });
             });
 
             peer.on('error', (err) => {
-                setStatus("Could not find that code, or sender closed their tab.");
+                setStatus("Could not find sender. Make sure their tab is open!");
             });
         }
+
+        // Auto-detect code from URL parameter when scanned via QR code
+        window.addEventListener('DOMContentLoaded', () => {
+            const urlParams = new URLSearchParams(window.location.search);
+            const codeFromUrl = urlParams.get('code');
+            
+            if (codeFromUrl && codeFromUrl.length === 3) {
+                receiveFile(codeFromUrl);
+            }
+        });
     </script>
 </body>
 </html>
