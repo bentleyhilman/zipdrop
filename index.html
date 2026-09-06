@@ -4,8 +4,11 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ZipDrop</title>
+    <!-- PeerJS + Firebase Realtime Database -->
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-database-compat.js"></script>
     <style>
         :root {
             --bg-color: #FAF9F6;
@@ -269,25 +272,29 @@
     </div>
 
     <script>
-        const PREFIX = 'zipdrop-v10-';
+        // Your real-zipdrop Firebase Configuration
+        const firebaseConfig = {
+            apiKey: "AIzaSyDK1mWgcA0Y0QsEiIOwFYF4aD_vnzF9ocI",
+            authDomain: "real-zipdrop.firebaseapp.com",
+            databaseURL: "https://real-zipdrop-default-rtdb.firebaseio.com",
+            projectId: "real-zipdrop",
+            storageBucket: "real-zipdrop.firebasestorage.app",
+            messagingSenderId: "986495479993",
+            appId: "1:986495479993:web:14c1f6291cfea17f65eb68",
+            measurementId: "G-84C0CKSVMS"
+        };
+
+        firebase.initializeApp(firebaseConfig);
+
+        const PREFIX = 'zipdrop-v11-';
         const CHUNK_SIZE = 64 * 1024;
         const TEN_MB = 10 * 1024 * 1024; // 10MB Limit
-
-        // Unified OpenRelay Configuration
-        const PEER_CONFIG = {
-            config: {
-                iceServers: [
-                    { urls: 'stun:openrelay.metered.ca:80' },
-                    { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
-                    { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
-                    { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' }
-                ]
-            }
-        };
 
         let peer = null;
         let fileToShare = null;
         let currentCode = '';
+        let connectedP2P = false;
+        let dbRef = null;
 
         const dragOverlay = document.getElementById('dragOverlay');
         const fileInput = document.getElementById('fileInput');
@@ -340,6 +347,7 @@
 
         function startHosting() {
             currentCode = generateCode();
+            connectedP2P = false;
             document.getElementById('displayCode').innerText = currentCode;
 
             const baseUrl = window.location.href.split('?')[0];
@@ -355,40 +363,49 @@
 
             showScreen('screenSendCode');
 
-            if (peer) peer.destroy();
-            peer = new Peer(PREFIX + currentCode, PEER_CONFIG);
-
-            peer.on('connection', (conn) => {
-                showScreen('screenConnecting');
-                document.getElementById('connectingText').innerText = "Connecting...";
-
-                conn.on('open', async () => {
-                    // Inspect connection type (Relaying vs Local P2P)
-                    let isRelayed = false;
-                    try {
-                        const pc = conn.peerConnection;
-                        const stats = await pc.getStats();
-                        stats.forEach(report => {
-                            if (report.type === 'candidate-pair' && report.state === 'succeeded') {
-                                const localCand = stats.get(report.localCandidateId);
-                                const remoteCand = stats.get(report.remoteCandidateId);
-                                if ((localCand && localCand.candidateType === 'relay') || (remoteCand && remoteCand.candidateType === 'relay')) {
-                                    isRelayed = true;
-                                }
-                            }
-                        });
-                    } catch (e) { }
-
-                    // Enforce 10MB limit if transferring over Internet Relay
-                    if (isRelayed && fileToShare.size > TEN_MB) {
+            // 1. Set up Firebase Listener for Internet Fallback Requests
+            dbRef = firebase.database().ref(`transfers/${currentCode}`);
+            dbRef.on('value', async (snapshot) => {
+                const data = snapshot.val();
+                if (data && data.status === 'requested' && !connectedP2P) {
+                    // Check file size limit for Internet Transfer
+                    if (fileToShare.size > TEN_MB) {
                         alert("max file size over the internet: 10MB. Try again over the same wifi.");
-                        conn.close();
+                        dbRef.update({ status: 'cancelled' });
                         resetToHome();
                         return;
                     }
 
                     showScreen('screenTransferring');
-                    document.getElementById('transferLabel').innerText = "Sending...";
+                    document.getElementById('transferLabel').innerText = "Sending (Internet Relay)...";
+
+                    const reader = new FileReader();
+                    reader.onload = async (e) => {
+                        const base64Data = e.target.result;
+                        await dbRef.update({
+                            status: 'transferring',
+                            filename: fileToShare.name,
+                            filetype: fileToShare.type,
+                            payload: base64Data
+                        });
+                        document.getElementById('progressFill').style.width = '100%';
+                        showScreen('screenSendSuccess');
+                    };
+                    reader.readAsDataURL(fileToShare);
+                }
+            });
+
+            // 2. Set up PeerJS for Direct Wi-Fi Connection
+            if (peer) peer.destroy();
+            peer = new Peer(PREFIX + currentCode);
+
+            peer.on('connection', (conn) => {
+                conn.on('open', async () => {
+                    connectedP2P = true;
+                    if (dbRef) dbRef.off(); // Disable internet relay since Wi-Fi worked
+
+                    showScreen('screenTransferring');
+                    document.getElementById('transferLabel').innerText = "Sending (Local Wi-Fi)...";
 
                     conn.send({
                         type: 'meta',
@@ -426,79 +443,86 @@
 
         function startReceiving(code) {
             showScreen('screenConnecting');
-            document.getElementById('connectingText').innerText = "Connecting...";
+            document.getElementById('connectingText').innerText = "Checking local Wi-Fi...";
 
+            connectedP2P = false;
+
+            // 1. Try Direct Wi-Fi Connection First
             if (peer) peer.destroy();
-            peer = new Peer(PEER_CONFIG);
+            peer = new Peer();
 
             peer.on('open', () => {
-                let conn = peer.connect(PREFIX + code, { reliable: true });
+                const conn = peer.connect(PREFIX + code, { reliable: true });
+                let chunks = [];
                 let fileMeta = null;
                 let receivedBytes = 0;
-                let chunks = [];
 
                 conn.on('open', () => {
+                    connectedP2P = true;
                     showScreen('screenTransferring');
-                    document.getElementById('transferLabel').innerText = "Downloading...";
+                    document.getElementById('transferLabel').innerText = "Downloading (Local Wi-Fi)...";
                 });
 
-                conn.on('data', async (data) => {
-                    if (data && data.type === 'meta') {
-                        fileMeta = data;
-
-                        // Check candidate stats on receiver side
-                        let isRelayed = false;
-                        try {
-                            const pc = conn.peerConnection;
-                            const stats = await pc.getStats();
-                            stats.forEach(report => {
-                                if (report.type === 'candidate-pair' && report.state === 'succeeded') {
-                                    const localCand = stats.get(report.localCandidateId);
-                                    const remoteCand = stats.get(report.remoteCandidateId);
-                                    if ((localCand && localCand.candidateType === 'relay') || (remoteCand && remoteCand.candidateType === 'relay')) {
-                                        isRelayed = true;
-                                    }
-                                }
-                            });
-                        } catch (e) { }
-
-                        if (isRelayed && fileMeta.filesize > TEN_MB) {
-                            alert("max file size over the internet: 10MB. Try again over the same wifi.");
-                            conn.close();
-                            resetToHome();
-                            return;
-                        }
-                        return;
-                    }
-
+                conn.on('data', (data) => {
+                    if (data && data.type === 'meta') { fileMeta = data; return; }
                     chunks.push(data);
                     receivedBytes += data.byteLength;
-
-                    if (fileMeta) {
-                        const progress = Math.min(100, (receivedBytes / fileMeta.filesize) * 100);
-                        document.getElementById('progressFill').style.width = `${progress}%`;
-                    }
-
+                    if (fileMeta) document.getElementById('progressFill').style.width = `${Math.min(100, (receivedBytes / fileMeta.filesize) * 100)}%`;
                     if (fileMeta && receivedBytes >= fileMeta.filesize) {
-                        const blob = new Blob(chunks, { type: fileMeta.filetype });
-                        const url = URL.createObjectURL(blob);
-                        
-                        const a = document.createElement('a');
-                        a.href = url;
-                        a.download = fileMeta.filename;
-                        document.body.appendChild(a);
-                        a.click();
-                        document.body.removeChild(a);
-                        URL.revokeObjectURL(url);
-
-                        showScreen('screenReceiveSuccess');
+                        triggerDownload(new Blob(chunks, { type: fileMeta.filetype }), fileMeta.filename);
                     }
                 });
             });
+
+            // 2. Fallback to Firebase Internet Relay after 3 seconds if Wi-Fi doesn't connect
+            setTimeout(() => {
+                if (!connectedP2P) {
+                    document.getElementById('connectingText').innerText = "Switching to internet relay...";
+
+                    dbRef = firebase.database().ref(`transfers/${code}`);
+                    dbRef.set({ status: 'requested' });
+
+                    dbRef.on('value', (snapshot) => {
+                        const data = snapshot.val();
+                        
+                        if (data && data.status === 'cancelled') {
+                            dbRef.remove();
+                            resetToHome();
+                            return;
+                        }
+
+                        if (data && data.status === 'transferring' && data.payload) {
+                            showScreen('screenTransferring');
+                            document.getElementById('transferLabel').innerText = "Downloading (Internet Relay)...";
+                            document.getElementById('progressFill').style.width = '100%';
+
+                            fetch(data.payload)
+                                .then(res => res.blob())
+                                .then(blob => {
+                                    triggerDownload(blob, data.filename);
+                                    dbRef.remove();
+                                });
+                        }
+                    });
+                }
+            }, 3000);
+        }
+
+        function triggerDownload(blob, filename) {
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            showScreen('screenReceiveSuccess');
         }
 
         function resetToHome() {
             if (peer) peer.destroy();
+            if (dbRef) dbRef.off();
             fileToShare = null;
             codeInput.value = '';
             document.getElementById('progressFill').style.width = '0%';
