@@ -55,7 +55,7 @@
             transform: scale(1);
         }
 
-        /* Full Screen Drag Overlay Indicator */
+        /* Full Screen Drag Overlay */
         #dragOverlay {
             position: fixed;
             inset: 0;
@@ -159,7 +159,6 @@
             gap: 12px;
         }
 
-        /* Shared Card Component */
         .center-card {
             display: flex;
             flex-direction: column;
@@ -201,7 +200,6 @@
             transition: width 0.15s ease-out;
         }
 
-        /* Pulse Animation for Connecting */
         .pulse {
             animation: pulse-animation 1.8s infinite ease-in-out;
         }
@@ -222,7 +220,6 @@
     <div id="dragOverlay">DROP FILE TO SEND</div>
     <input type="file" id="fileInput">
 
-    <!-- HOME SCREEN -->
     <div id="screenHome" class="screen active">
         <div class="brand-logo">ZipDrop</div>
         
@@ -235,7 +232,6 @@
         <button class="btn" onclick="document.getElementById('fileInput').click()">Upload File</button>
     </div>
 
-    <!-- SENDER: QR & CODE SCREEN -->
     <div id="screenSendCode" class="screen">
         <div></div>
         <div class="center-card">
@@ -246,16 +242,14 @@
         <button class="btn btn-secondary" onclick="resetToHome()">Cancel</button>
     </div>
 
-    <!-- SHARED: CONNECTING SCREEN -->
     <div id="screenConnecting" class="screen">
         <div></div>
         <div class="center-card">
-            <div class="status-heading pulse">Connecting...</div>
+            <div class="status-heading pulse">Connecting across networks...</div>
         </div>
         <div></div>
     </div>
 
-    <!-- SHARED: TRANSFERRING SCREEN -->
     <div id="screenTransferring" class="screen">
         <div></div>
         <div class="center-card">
@@ -267,7 +261,6 @@
         <div></div>
     </div>
 
-    <!-- SENDER: SUCCESS SCREEN -->
     <div id="screenSendSuccess" class="screen">
         <div></div>
         <div class="center-card">
@@ -279,7 +272,6 @@
         </div>
     </div>
 
-    <!-- RECEIVER: SUCCESS SCREEN -->
     <div id="screenReceiveSuccess" class="screen">
         <div></div>
         <div class="center-card">
@@ -289,9 +281,34 @@
     </div>
 
     <script>
-        const PREFIX = 'zipdrop-v3-';
+        const PREFIX = 'zipdrop-v4-';
         const CHUNK_SIZE = 64 * 1024;
         
+        // Multi-network ICE configuration (STUN + TURN relays)
+        const peerIceConfig = {
+            config: {
+                iceServers: [
+                    { urls: 'stun:stun.l.google.com:19302' },
+                    { urls: 'stun:global.stun.twilio.com:3478' },
+                    {
+                        urls: 'turn:openrelay.metered.ca:80',
+                        username: 'openrelayproject',
+                        credential: 'openrelayproject'
+                    },
+                    {
+                        urls: 'turn:openrelay.metered.ca:443',
+                        username: 'openrelayproject',
+                        credential: 'openrelayproject'
+                    },
+                    {
+                        urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+                        username: 'openrelayproject',
+                        credential: 'openrelayproject'
+                    }
+                ]
+            }
+        };
+
         let peer = null;
         let activeConn = null;
         let fileToShare = null;
@@ -302,7 +319,6 @@
         const codeInput = document.getElementById('codeInput');
         const qrContainer = document.getElementById('qrcode');
 
-        // Navigation Engine
         function showScreen(screenId) {
             document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
             document.getElementById(screenId).classList.add('active');
@@ -317,7 +333,7 @@
             return result;
         }
 
-        // Global Drag & Drop Engine (Whole Screen)
+        // Fullscreen Drag & Drop
         window.addEventListener('dragover', (e) => {
             e.preventDefault();
             dragOverlay.classList.add('visible');
@@ -343,7 +359,7 @@
             }
         });
 
-        // Code Entry Auto-Submit
+        // Auto-Submit Code Entry
         codeInput.addEventListener('input', (e) => {
             const val = e.target.value.toUpperCase();
             e.target.value = val;
@@ -352,7 +368,7 @@
             }
         });
 
-        // Sender Logic
+        // Sender Flow
         function handleFileSelect(file) {
             fileToShare = file;
             startHosting();
@@ -362,7 +378,6 @@
             currentCode = generateCode();
             document.getElementById('displayCode').innerText = currentCode;
 
-            // Generate QR Code
             const baseUrl = window.location.href.split('?')[0];
             qrContainer.innerHTML = "";
             new QRCode(qrContainer, {
@@ -377,9 +392,7 @@
             showScreen('screenSendCode');
 
             if (peer) peer.destroy();
-            peer = new Peer(PREFIX + currentCode, {
-                config: { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] }
-            });
+            peer = new Peer(PREFIX + currentCode, peerIceConfig);
 
             peer.on('connection', (conn) => {
                 activeConn = conn;
@@ -423,14 +436,12 @@
             startHosting();
         }
 
-        // Receiver Logic
+        // Receiver Flow
         function startReceiving(code) {
             showScreen('screenConnecting');
 
             if (peer) peer.destroy();
-            peer = new Peer({
-                config: { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] }
-            });
+            peer = new Peer(peerIceConfig);
 
             peer.on('open', () => {
                 const conn = peer.connect(PREFIX + code);
